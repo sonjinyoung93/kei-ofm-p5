@@ -4,6 +4,7 @@ import { Plus, Trash2, Download, ClipboardList, LayoutDashboard, Loader2, AlertC
 
 const ROWS = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
 const COLS = Array.from({ length: 70 }, (_, i) => String(i + 1));
+const FLOORS = Array.from({ length: 12 }, (_, i) => `${i + 1}F`);
 const PROCESSES = ['자탐', '유도등', '무통'];
 const UNITS = ['EA', 'M', 'SET', 'BOX', 'ROLL', 'KG'];
 const STATUS_FLOW = ['요청됨', '확인됨', '발주완료', '입고완료'];
@@ -148,7 +149,8 @@ const GlobalStyle = () => (
     .mrs-top-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
     @media (max-width: 480px) { .mrs-top-grid { gap: 6px; } .mrs-top-grid .mrs-field-label { font-size: 10px; } .mrs-top-grid input, .mrs-top-grid select { font-size: 12px; padding: 7px 6px; } }
     .mrs-zone-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; }
-    @media (max-width: 480px) { .mrs-zone-grid { gap: 5px; } .mrs-zone-grid select { font-size: 12px; padding: 7px 3px; } }
+    .mrs-zone-grid-5 { grid-template-columns: 1fr 1fr 1fr 1fr 1fr; }
+    @media (max-width: 480px) { .mrs-zone-grid { gap: 5px; } .mrs-zone-grid select { font-size: 12px; padding: 7px 3px; } .mrs-zone-grid-5 select { font-size: 11px; padding: 6px 1px; } }
     .mrs-item-row { display: grid; grid-template-columns: 1.6fr 1fr 0.7fr 0.6fr 0.7fr auto; gap: 6px; align-items: end; padding: 10px 0; border-bottom: 1px dashed var(--line); }
     @media (max-width: 480px) { .mrs-item-row { gap: 4px; } .mrs-item-row select, .mrs-item-row input { font-size: 12px; padding: 7px 3px; } }
     .mrs-btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 16px; border-radius: 2px; font-size: 14px; font-weight: 600; cursor: pointer; border: 1px solid transparent; transition: all .15s ease; }
@@ -266,7 +268,7 @@ function LoginScreen({ onLogin, loading, error }) {
 
 // ── 팀장: 요청 입력 폼 ──────────────────────────────────
 function RequestForm({ session, projectName, onSubmit, saving }) {
-  const [floor, setFloor] = useState('1F');
+  const [floor, setFloor] = useState(FLOORS[0]);
   const [rowFrom, setRowFrom] = useState('A');
   const [rowTo, setRowTo] = useState('A');
   const [colFrom, setColFrom] = useState('1');
@@ -298,7 +300,7 @@ function RequestForm({ session, projectName, onSubmit, saving }) {
         .map(it => ({ id: genId(), name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit, status: '요청됨' })),
     };
     await onSubmit(payload);
-    setFloor('1F'); setRowFrom('A'); setRowTo('A'); setColFrom('1'); setColTo('1');
+    setFloor(FLOORS[0]); setRowFrom('A'); setRowTo('A'); setColFrom('1'); setColTo('1');
     setProcess(PROCESSES[0]); setNote(''); setItems([newItemRow()]);
     setJustSubmitted(true);
     setTimeout(() => setJustSubmitted(false), 3000);
@@ -318,9 +320,9 @@ function RequestForm({ session, projectName, onSubmit, saving }) {
       </div>
 
       <div style={{ marginBottom: 14 }}>
-        <label className="mrs-field-label">층 / 구역 (행 / 열)</label>
-        <input className="mrs-input" value={floor} onChange={e => setFloor(e.target.value)} placeholder="층 (예: 1F)" style={{ marginBottom: 6, maxWidth: 140 }} />
-        <div className="mrs-zone-grid">
+        <label className="mrs-field-label">구역 (층 / 행 / 열)</label>
+        <div className="mrs-zone-grid mrs-zone-grid-5">
+          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>층</span><select className="mrs-select" value={floor} onChange={e => setFloor(e.target.value)}>{FLOORS.map(f => <option key={f} value={f}>{f}</option>)}</select></div>
           <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>행 시작</span><select className="mrs-select" value={rowFrom} onChange={e => setRowFrom(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
           <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>행 끝</span><select className="mrs-select" value={rowTo} onChange={e => setRowTo(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
           <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>열 시작</span><select className="mrs-select" value={colFrom} onChange={e => setColFrom(e.target.value)}>{COLS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
@@ -739,20 +741,18 @@ function OrderManager({ orders, session, onAdd, onDelete, saving }) {
 
 
 // ── 관리자 전체 화면 ────────────────────────────────────
-function AdminApp({ session, requests, projects, users, orders, onUpdateStatus, onDelete, onSaveProjects, onAddUser, onUpdateUser, onDeleteUser, onAddOrder, onDeleteOrder, savingSettings }) {
+function AdminApp({ session, requests, projects, users, onUpdateStatus, onDelete, onSaveProjects, onAddUser, onUpdateUser, onDeleteUser, savingSettings }) {
   const [tab, setTab] = useState('today');
   return (
     <div className="mrs-body">
       <div className="mrs-tabs" style={{ margin: '-20px -20px 20px', padding: '0 20px' }}>
         <button className={`mrs-tab ${tab === 'today' ? 'active' : ''}`} onClick={() => setTab('today')}><CalendarDays size={16} /> 금일 자재요청</button>
         <button className={`mrs-tab ${tab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}><LayoutDashboard size={16} /> 누계 요청리스트</button>
-        <button className={`mrs-tab ${tab === 'orders' ? 'active' : ''}`} onClick={() => setTab('orders')}><ClipboardList size={16} /> 발주요청</button>
         <button className={`mrs-tab ${tab === 'manage' ? 'active' : ''}`} onClick={() => setTab('manage')}><Users size={16} /> 관리 설정</button>
       </div>
 
       {tab === 'today' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="today" />}
       {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" />}
-      {tab === 'orders' && <OrderManager orders={orders} session={session} onAdd={onAddOrder} onDelete={onDeleteOrder} saving={savingSettings} />}
       {tab === 'manage' && (
         <div>
           <ProjectManager projects={projects} onSave={onSaveProjects} saving={savingSettings} />
@@ -1058,10 +1058,9 @@ export default function App() {
         <div className="mrs-empty"><Loader2 size={20} className="mrs-spin" /><div style={{ marginTop: 8 }}>불러오는 중...</div></div>
       ) : session.role === 'admin' ? (
         <AdminApp
-          session={session} requests={requests} projects={projects} users={users} orders={orders}
+          session={session} requests={requests} projects={projects} users={users}
           onUpdateStatus={handleUpdateStatus} onDelete={handleDelete} onSaveProjects={handleSaveProjects}
           onAddUser={handleAddUser} onUpdateUser={handleUpdateUser} onDeleteUser={handleDeleteUser}
-          onAddOrder={handleAddOrder} onDeleteOrder={handleDeleteOrder}
           savingSettings={savingSettings}
         />
       ) : session.role === 'material' ? (
@@ -1072,4 +1071,3 @@ export default function App() {
     </div>
   );
 }
-
