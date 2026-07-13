@@ -645,77 +645,89 @@ function OrderManager({ orders, session, onAdd, onDelete, saving }) {
   const [rowTo, setRowTo] = useState('A');
   const [colFrom, setColFrom] = useState('1');
   const [colTo, setColTo] = useState('1');
-  const [name, setName] = useState(CATALOG_NAMES[0]);
-  const [spec, setSpec] = useState(getSpecs(CATALOG_NAMES[0])[0]);
-  const [color, setColor] = useState(getColors(CATALOG_NAMES[0], getSpecs(CATALOG_NAMES[0])[0])[0]);
-  const [unit, setUnit] = useState(getUnits(CATALOG_NAMES[0])[0]);
-  const [qty, setQty] = useState('');
+  const [qtyMap, setQtyMap] = useState({}); // key: "품목|규격|색상" -> 수량
   const [note, setNote] = useState('');
 
-  const specs = getSpecs(name);
-  const colors = getColors(name, spec);
-  const units = getUnits(name);
+  const nextOrderNo = Math.max(0, ...orders.map(o => Number(o.orderNo) || 0)) + 1;
+  const key = (n, s, c) => `${n}|${s}|${c}`;
 
-  function handleNameChange(n) {
-    const s = getSpecs(n)[0]; setName(n); setSpec(s);
-    setColor(getColors(n, s)[0]); setUnit(getUnits(n)[0]);
-  }
-  function handleSpecChange(s) { setSpec(s); setColor(getColors(name, s)[0]); }
+  function setQty(n, s, c, val) { setQtyMap({ ...qtyMap, [key(n, s, c)]: val }); }
 
   function submit() {
-    if (!qty || Number(qty) <= 0) { alert('발주수량을 입력해주세요.'); return; }
-    onAdd({
-      itemName: name, itemSpec: spec, itemColor: color,
-      floor, rowFrom, rowTo, colFrom, colTo, qty, unit, note: note.trim(), createdBy: session.name,
+    const items = [];
+    CATALOG_NAMES.forEach(n => {
+      getSpecs(n).forEach(s => {
+        getColors(n, s).forEach(c => {
+          const val = qtyMap[key(n, s, c)];
+          if (val && Number(val) > 0) items.push({ itemName: n, itemSpec: s, itemColor: c, qty: val, unit: getUnits(n)[0] });
+        });
+      });
     });
-    setQty(''); setNote('');
+    if (items.length === 0) { alert('확보물량을 하나 이상 입력해주세요.'); return; }
+    onAdd({ floor, rowFrom, rowTo, colFrom, colTo, note: note.trim(), createdBy: session.name, items });
+    setQtyMap({}); setNote('');
   }
 
   return (
     <div>
-      <div className="mrs-card" style={{ padding: 18, marginBottom: 20 }}>
-        <h3 className="mrs-display" style={{ fontSize: 15, margin: '0 0 12px', fontWeight: 600 }}>발주요청 등록 (지급자재 산출 물량)</h3>
+      <div className="mrs-card" style={{ padding: 18, marginBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <h3 className="mrs-display" style={{ fontSize: 15, margin: 0, fontWeight: 600 }}>발주요청 등록 (지급자재 산출 물량)</h3>
+          <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>지급자재 NO.{nextOrderNo}</span>
+        </div>
 
-        <label className="mrs-field-label">층 / 구간 (행 / 열)</label>
-        <input className="mrs-input" value={floor} onChange={e => setFloor(e.target.value)} placeholder="층 (예: 1F)" style={{ marginBottom: 6, maxWidth: 140 }} />
-        <div className="mrs-zone-grid" style={{ marginBottom: 12 }}>
+        <label className="mrs-field-label">층</label>
+        <input className="mrs-input" value={floor} onChange={e => setFloor(e.target.value)} placeholder="층 (예: 1F)" style={{ marginBottom: 10, maxWidth: 140 }} />
+
+        <label className="mrs-field-label">구간 (행 / 열)</label>
+        <div className="mrs-zone-grid" style={{ marginBottom: 8 }}>
           <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>행 시작</span><select className="mrs-select" value={rowFrom} onChange={e => setRowFrom(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
           <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>행 끝</span><select className="mrs-select" value={rowTo} onChange={e => setRowTo(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
           <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>열 시작</span><select className="mrs-select" value={colFrom} onChange={e => setColFrom(e.target.value)}>{COLS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
           <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>열 끝</span><select className="mrs-select" value={colTo} onChange={e => setColTo(e.target.value)}>{COLS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
         </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 0.8fr 0.8fr 0.7fr', gap: 8, marginBottom: 12 }}>
-          <div><label className="mrs-field-label">품목</label><select className="mrs-select" value={name} onChange={e => handleNameChange(e.target.value)}>{CATALOG_NAMES.map(n => <option key={n} value={n}>{n}</option>)}</select></div>
-          <div><label className="mrs-field-label">규격</label><select className="mrs-select" value={spec} onChange={e => handleSpecChange(e.target.value)}>{specs.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
-          <div><label className="mrs-field-label">색상</label><select className="mrs-select" value={color} onChange={e => setColor(e.target.value)} disabled={colors.length <= 1}>{colors.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-          <div><label className="mrs-field-label">발주수량</label><input className="mrs-input" type="number" min="0" value={qty} onChange={e => setQty(e.target.value)} placeholder="0" /></div>
-          <div><label className="mrs-field-label">단위</label><select className="mrs-select" value={unit} onChange={e => setUnit(e.target.value)} disabled={units.length <= 1}>{units.map(u => <option key={u} value={u}>{u}</option>)}</select></div>
-        </div>
-
-        <label className="mrs-field-label">비고 (선택)</label>
-        <input className="mrs-input" value={note} onChange={e => setNote(e.target.value)} placeholder="" style={{ marginBottom: 14 }} />
-
-        <button className="mrs-btn mrs-btn-primary" onClick={submit} disabled={saving}><Plus size={15} /> 발주요청 등록</button>
       </div>
+
+      {CATALOG_NAMES.map(n => (
+        <div className="mrs-card" key={n} style={{ padding: 16, marginBottom: 10 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>{n}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            {getSpecs(n).map(s => getColors(n, s).map(c => (
+              <div key={key(n, s, c)} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 12, color: 'var(--ink-soft)', minWidth: 56 }}>{c === 'N/A' ? s : `${s} ${c}`}</span>
+                <input className="mrs-input" type="number" min="0" value={qtyMap[key(n, s, c)] || ''} onChange={e => setQty(n, s, c, e.target.value)} placeholder="확보물량" />
+              </div>
+            )))}
+          </div>
+        </div>
+      ))}
+
+      <div className="mrs-card" style={{ padding: 16, marginBottom: 16 }}>
+        <label className="mrs-field-label">비고 (선택)</label>
+        <input className="mrs-input" value={note} onChange={e => setNote(e.target.value)} placeholder="" />
+      </div>
+
+      <button className="mrs-btn mrs-btn-primary" onClick={submit} disabled={saving} style={{ marginBottom: 24 }}>
+        <Plus size={15} /> 지급자재 NO.{nextOrderNo}로 저장
+      </button>
 
       <div className="mrs-table-wrap">
         <table className="mrs-table">
-          <thead><tr><th>층</th><th>구간</th><th>품목</th><th>규격</th><th>색상</th><th>발주수량</th><th>등록자</th><th>등록일</th><th></th></tr></thead>
+          <thead><tr><th>NO</th><th>층</th><th>행시작</th><th>행끝</th><th>열시작</th><th>열끝</th><th>품목</th><th>규격</th><th>단위</th><th>확보물량</th><th>색상</th><th></th></tr></thead>
           <tbody>
             {orders.length === 0 ? (
-              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 20, color: 'var(--ink-soft)' }}>등록된 발주요청이 없습니다.</td></tr>
-            ) : orders.slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map(o => (
+              <tr><td colSpan={12} style={{ textAlign: 'center', padding: 20, color: 'var(--ink-soft)' }}>등록된 발주요청이 없습니다.</td></tr>
+            ) : orders.slice().sort((a, b) => (Number(a.orderNo) || 0) - (Number(b.orderNo) || 0)).map(o => (
               <tr key={o.id}>
+                <td className="mrs-mono">{o.orderNo}</td>
                 <td>{o.floor}</td>
-                <td>{fmtZone(o.rowFrom, o.rowTo, o.colFrom, o.colTo)}</td>
+                <td>{o.rowFrom}</td><td>{o.rowTo}</td><td>{o.colFrom}</td><td>{o.colTo}</td>
                 <td style={{ fontWeight: 600 }}>{o.itemName}</td>
                 <td style={{ color: 'var(--ink-soft)' }}>{o.itemSpec}</td>
+                <td>{o.unit}</td>
+                <td className="mrs-mono">{o.qty}</td>
                 <td style={{ color: 'var(--ink-soft)' }}>{o.itemColor}</td>
-                <td className="mrs-mono">{o.qty} {o.unit}</td>
-                <td>{o.createdBy}</td>
-                <td className="mrs-mono" style={{ fontSize: 12 }}>{fmtDate(o.createdAt)}</td>
-                <td><button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: '#B84B10' }} onClick={() => { if (confirm('이 발주요청을 삭제할까요?')) onDelete(o.id); }}><X size={15} /></button></td>
+                <td><button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: '#B84B10' }} onClick={() => { if (confirm(`지급자재 NO.${o.orderNo} 전체를 삭제할까요?`)) onDelete(o.orderNo); }}><X size={15} /></button></td>
               </tr>
             ))}
           </tbody>
@@ -817,12 +829,13 @@ function MaterialBalance({ orders, requests }) {
     <div>
       <div className="mrs-table-wrap" style={{ marginBottom: 20 }}>
         <table className="mrs-table">
-          <thead><tr><th>층</th><th>구간</th><th>품목</th><th>규격</th><th>색상</th><th>발주물량</th><th>현장입고</th><th>잔여물량</th></tr></thead>
+          <thead><tr><th>NO</th><th>층</th><th>구간</th><th>품목</th><th>규격</th><th>색상</th><th>발주물량</th><th>현장입고</th><th>잔여물량</th></tr></thead>
           <tbody>
             {rows.length === 0 ? (
-              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 20, color: 'var(--ink-soft)' }}>등록된 발주요청이 없습니다.</td></tr>
+              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 20, color: 'var(--ink-soft)' }}>등록된 발주요청이 없습니다.</td></tr>
             ) : rows.map(r => (
               <tr key={r.id}>
+                <td className="mrs-mono">{r.orderNo}</td>
                 <td>{r.floor}</td>
                 <td>{fmtZone(r.rowFrom, r.rowTo, r.colFrom, r.colTo)}</td>
                 <td style={{ fontWeight: 600 }}>{r.itemName}</td>
@@ -999,10 +1012,10 @@ export default function App() {
     finally { setSavingSettings(false); }
   }
 
-  async function handleDeleteOrder(id) {
+  async function handleDeleteOrder(orderNo) {
     setSavingSettings(true); setError(null);
     try {
-      const res = await apiPost('deleteOrder', { id });
+      const res = await apiPost('deleteOrder', { orderNo });
       if (res.error) { alert(res.error); return; }
       await loadData(session.role);
     } catch (e) { setError('발주요청 삭제에 실패했습니다.'); }
