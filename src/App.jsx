@@ -38,6 +38,15 @@ const CATALOG_NAMES = [...new Set(CATALOG.map(c => c.name))];
 function getSpecs(name) { return [...new Set(CATALOG.filter(c => c.name === name).map(c => c.spec))]; }
 function getColors(name, spec) { return [...new Set(CATALOG.filter(c => c.name === name && c.spec === spec).map(c => c.color))]; }
 
+const ITEM_UNITS = {
+  '무나사전선관': ['본', 'M'],
+  '커플링': ['EA', 'BOX'],
+  '박스커넥터': ['EA', 'BOX'],
+  '통신케이블': ['롤', 'M'],
+  '내화케이블': ['M'],
+};
+function getUnits(name) { return ITEM_UNITS[name] || UNITS; }
+
 const DEFAULT_PROJECTS = [
   { id: 'proj-1', name: 'P4 Ph4 (삼성물산)' },
   { id: 'proj-2', name: '신규 프로젝트' },
@@ -87,7 +96,8 @@ function newItemRow() {
   const name = CATALOG_NAMES[0];
   const spec = getSpecs(name)[0];
   const color = getColors(name, spec)[0];
-  return { id: genId(), name, spec, color, qty: '', unit: 'EA' };
+  const unit = getUnits(name)[0];
+  return { id: genId(), name, spec, color, qty: '', unit };
 }
 
 const GlobalStyle = () => (
@@ -122,10 +132,12 @@ const GlobalStyle = () => (
     .mrs-input, .mrs-select, .mrs-textarea { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--line); border-radius: 2px; background: #fff; font-size: 14px; color: var(--ink); font-family: inherit; }
     .mrs-input:focus, .mrs-select:focus, .mrs-textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(217,96,27,0.12); }
     .mrs-input:disabled, .mrs-select:disabled { background: #F1EFE9; color: var(--ink-soft); }
+    .mrs-top-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    @media (max-width: 480px) { .mrs-top-grid { gap: 6px; } .mrs-top-grid .mrs-field-label { font-size: 10px; } .mrs-top-grid input, .mrs-top-grid select { font-size: 12px; padding: 7px 6px; } }
     .mrs-zone-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; }
-    @media (max-width: 640px) { .mrs-zone-grid { grid-template-columns: 1fr 1fr; } }
-    .mrs-item-row { display: grid; grid-template-columns: 1.6fr 1fr 0.8fr 0.7fr 0.7fr auto; gap: 8px; align-items: end; padding: 10px 0; border-bottom: 1px dashed var(--line); }
-    @media (max-width: 820px) { .mrs-item-row { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 480px) { .mrs-zone-grid { gap: 5px; } .mrs-zone-grid select { font-size: 12px; padding: 7px 3px; } }
+    .mrs-item-row { display: grid; grid-template-columns: 1.6fr 1fr 0.7fr 0.6fr 0.7fr auto; gap: 6px; align-items: end; padding: 10px 0; border-bottom: 1px dashed var(--line); }
+    @media (max-width: 480px) { .mrs-item-row { gap: 4px; } .mrs-item-row select, .mrs-item-row input { font-size: 12px; padding: 7px 3px; } }
     .mrs-btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 16px; border-radius: 2px; font-size: 14px; font-weight: 600; cursor: pointer; border: 1px solid transparent; transition: all .15s ease; }
     .mrs-btn-primary { background: var(--accent); color: #fff; }
     .mrs-btn-primary:hover { background: var(--accent-dark); }
@@ -173,10 +185,12 @@ function StatusBadge({ value }) {
 function ItemRowEditor({ item, onChange, onRemove, removable }) {
   const specs = getSpecs(item.name);
   const colors = getColors(item.name, item.spec);
+  const units = getUnits(item.name);
   function handleNameChange(name) {
     const spec = getSpecs(name)[0];
     const color = getColors(name, spec)[0];
-    onChange({ ...item, name, spec, color });
+    const unit = getUnits(name)[0];
+    onChange({ ...item, name, spec, color, unit });
   }
   function handleSpecChange(spec) {
     const color = getColors(item.name, spec)[0];
@@ -186,9 +200,9 @@ function ItemRowEditor({ item, onChange, onRemove, removable }) {
     <div className="mrs-item-row">
       <div><select className="mrs-select" value={item.name} onChange={e => handleNameChange(e.target.value)}>{CATALOG_NAMES.map(n => <option key={n} value={n}>{n}</option>)}</select></div>
       <div><select className="mrs-select" value={item.spec} onChange={e => handleSpecChange(e.target.value)}>{specs.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
-      <div><select className="mrs-select" value={item.color} onChange={e => onChange({ ...item, color: e.target.value })} disabled={colors.length <= 1}>{colors.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
       <div><input className="mrs-input" type="number" min="0" value={item.qty} onChange={e => onChange({ ...item, qty: e.target.value })} placeholder="0" /></div>
-      <div><select className="mrs-select" value={item.unit} onChange={e => onChange({ ...item, unit: e.target.value })}>{UNITS.map(u => <option key={u} value={u}>{u}</option>)}</select></div>
+      <div><select className="mrs-select" value={item.unit} onChange={e => onChange({ ...item, unit: e.target.value })} disabled={units.length <= 1}>{units.map(u => <option key={u} value={u}>{u}</option>)}</select></div>
+      <div><select className="mrs-select" value={item.color} onChange={e => onChange({ ...item, color: e.target.value })} disabled={colors.length <= 1}>{colors.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
       <button className="mrs-btn mrs-btn-danger" onClick={onRemove} disabled={!removable} title="삭제" style={{ padding: 8 }}><Trash2 size={16} /></button>
     </div>
   );
@@ -282,38 +296,34 @@ function RequestForm({ session, projectName, onSubmit, saving }) {
         <span className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>NEW REQUEST</span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
+      <div className="mrs-top-grid" style={{ marginBottom: 14 }}>
         <div><label className="mrs-field-label">요청자</label><input className="mrs-input" value={session.name} disabled /></div>
         <div><label className="mrs-field-label">프로젝트</label><input className="mrs-input" value={projectName} disabled /></div>
-      </div>
-
-      <div style={{ marginBottom: 14 }}>
-        <label className="mrs-field-label">공정</label>
-        <select className="mrs-select" value={process} onChange={e => setProcess(e.target.value)}>{PROCESSES.map(p => <option key={p} value={p}>{p}</option>)}</select>
+        <div><label className="mrs-field-label">공정</label><select className="mrs-select" value={process} onChange={e => setProcess(e.target.value)}>{PROCESSES.map(p => <option key={p} value={p}>{p}</option>)}</select></div>
       </div>
 
       <div style={{ marginBottom: 14 }}>
         <label className="mrs-field-label">구역 (행 / 열)</label>
         <div className="mrs-zone-grid">
-          <div><span style={{ fontSize: 11, color: 'var(--ink-soft)' }}>행 시작</span><select className="mrs-select" value={rowFrom} onChange={e => setRowFrom(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
-          <div><span style={{ fontSize: 11, color: 'var(--ink-soft)' }}>행 끝</span><select className="mrs-select" value={rowTo} onChange={e => setRowTo(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
-          <div><span style={{ fontSize: 11, color: 'var(--ink-soft)' }}>열 시작</span><select className="mrs-select" value={colFrom} onChange={e => setColFrom(e.target.value)}>{COLS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-          <div><span style={{ fontSize: 11, color: 'var(--ink-soft)' }}>열 끝</span><select className="mrs-select" value={colTo} onChange={e => setColTo(e.target.value)}>{COLS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>행 시작</span><select className="mrs-select" value={rowFrom} onChange={e => setRowFrom(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
+          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>행 끝</span><select className="mrs-select" value={rowTo} onChange={e => setRowTo(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
+          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>열 시작</span><select className="mrs-select" value={colFrom} onChange={e => setColFrom(e.target.value)}>{COLS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>열 끝</span><select className="mrs-select" value={colTo} onChange={e => setColTo(e.target.value)}>{COLS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
         </div>
       </div>
 
       <div style={{ marginBottom: 8 }}><label className="mrs-field-label">요청 품목</label></div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 0.8fr 0.7fr 0.7fr auto', gap: 8, marginBottom: 4 }}>
-        <span style={{ fontSize: 11, color: 'var(--ink-soft)' }}>품목</span><span style={{ fontSize: 11, color: 'var(--ink-soft)' }}>규격</span>
-        <span style={{ fontSize: 11, color: 'var(--ink-soft)' }}>색상</span><span style={{ fontSize: 11, color: 'var(--ink-soft)' }}>수량</span>
-        <span style={{ fontSize: 11, color: 'var(--ink-soft)' }}>단위</span><span></span>
+      <div className="mrs-item-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
+        <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목</span><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
+        <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>수량</span><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>단위</span>
+        <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span><span></span>
       </div>
       {items.map(it => <ItemRowEditor key={it.id} item={it} onChange={u => updateItem(it.id, u)} onRemove={() => removeItem(it.id)} removable={items.length > 1} />)}
       <button className="mrs-btn mrs-btn-ghost" style={{ marginTop: 10 }} onClick={addItem}><Plus size={15} /> 품목 추가</button>
 
       <div style={{ marginTop: 18 }}>
         <label className="mrs-field-label">특이사항 (선택)</label>
-        <input className="mrs-input" value={note} onChange={e => setNote(e.target.value)} placeholder="예: 3층 반입 엘리베이터 이용 불가, 인력으로 운반 필요" />
+        <input className="mrs-input" value={note} onChange={e => setNote(e.target.value)} placeholder="" />
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 22 }}>
