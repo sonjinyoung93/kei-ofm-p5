@@ -7,11 +7,10 @@ const COLS = Array.from({ length: 70 }, (_, i) => String(i + 1));
 const FLOORS = Array.from({ length: 12 }, (_, i) => `${i + 1}F`);
 const PROCESSES = ['자탐', '유도등', '무통'];
 const UNITS = ['EA', 'M', 'SET', 'BOX', 'ROLL', 'KG'];
-const STATUS_FLOW = ['요청됨', '확인됨', '발주완료', '입고완료'];
+const STATUS_FLOW = ['요청됨', '확인됨', '입고완료'];
 const STATUS_COLOR = {
   '요청됨':   { bg: '#EEF0EC', fg: '#5C6B73', bd: '#C9CFC6' },
   '확인됨':   { bg: '#E3ECF5', fg: '#2B5A8C', bd: '#9FBEDC' },
-  '발주완료': { bg: '#FBE7DA', fg: '#B84B10', bd: '#F0A97A' },
   '입고완료': { bg: '#E1EBE3', fg: '#2E6B47', bd: '#9FC7AC' },
 };
 
@@ -417,6 +416,8 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope }) 
   const [zoneQuery, setZoneQuery] = useState('');
   const [processFilter, setProcessFilter] = useState('전체');
   const [statusFilter, setStatusFilter] = useState('전체');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
 
   const projectNameById = {};
   projects.forEach(p => { projectNameById[p.id] = p.name; });
@@ -439,7 +440,9 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope }) 
     (projectFilter === '전체' || r.projectId === projectFilter) &&
     (zoneQuery.trim() === '' || r.zone.includes(zoneQuery.trim())) &&
     (processFilter === '전체' || r.process === processFilter) &&
-    (statusFilter === '전체' || r.status === statusFilter)
+    (statusFilter === '전체' || r.status === statusFilter) &&
+    (dateFrom === '' || new Date(r.createdAt) >= new Date(dateFrom + 'T00:00:00')) &&
+    (dateTo === '' || new Date(r.createdAt) <= new Date(dateTo + 'T23:59:59'))
   ).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
   const counts = STATUS_FLOW.reduce((acc, s) => { acc[s] = rows.filter(r => (projectFilter === '전체' || r.projectId === projectFilter) && r.status === s).length; return acc; }, {});
@@ -478,6 +481,13 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope }) 
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14, alignItems: 'center' }}>
         <input className="mrs-input" style={{ width: 160 }} value={zoneQuery} onChange={e => setZoneQuery(e.target.value)} placeholder="구역 검색 (예: A행)" />
+        {scope === 'all' && (
+          <>
+            <input className="mrs-input" type="date" style={{ width: 145 }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+            <span style={{ fontSize: 12, color: 'var(--ink-soft)' }}>~</span>
+            <input className="mrs-input" type="date" style={{ width: 145 }} value={dateTo} onChange={e => setDateTo(e.target.value)} />
+          </>
+        )}
         <select className="mrs-select" style={{ width: 'auto' }} value={processFilter} onChange={e => setProcessFilter(e.target.value)}>
           <option value="전체">전체 공정</option>{PROCESSES.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
@@ -874,17 +884,18 @@ function MaterialBalance({ orders, requests }) {
 }
 
 // ── 자재팀 전체 화면 ────────────────────────────────────
-function MaterialApp({ requests, projects, orders, onUpdateStatus }) {
+function MaterialApp({ requests, projects, orders, onUpdateStatus, onDelete }) {
   const [tab, setTab] = useState('outbound');
   return (
     <div className="mrs-body">
       <div className="mrs-tabs" style={{ margin: '-20px -20px 20px', padding: '0 20px' }}>
         <button className={`mrs-tab ${tab === 'outbound' ? 'active' : ''}`} onClick={() => setTab('outbound')}><ClipboardList size={16} /> 현장 출고 대기</button>
-        <button className={`mrs-tab ${tab === 'balance' ? 'active' : ''}`} onClick={() => setTab('balance')}><LayoutDashboard size={16} /> 잔여물량 현황</button>
+        <button className={`mrs-tab ${tab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}><LayoutDashboard size={16} /> 누계 요청리스트</button>
+        <button className={`mrs-tab ${tab === 'balance' ? 'active' : ''}`} onClick={() => setTab('balance')}><CalendarDays size={16} /> 잔여물량 현황</button>
       </div>
-      {tab === 'outbound'
-        ? <MaterialOutbound requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} />
-        : <MaterialBalance orders={orders} requests={requests} />}
+      {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} />}
+      {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" />}
+      {tab === 'balance' && <MaterialBalance orders={orders} requests={requests} />}
     </div>
   );
 }
@@ -1064,10 +1075,11 @@ export default function App() {
           savingSettings={savingSettings}
         />
       ) : session.role === 'material' ? (
-        <MaterialApp requests={requests} projects={projects} orders={orders} onUpdateStatus={handleUpdateStatus} />
+        <MaterialApp requests={requests} projects={projects} orders={orders} onUpdateStatus={handleUpdateStatus} onDelete={handleDelete} />
       ) : (
         <LeaderApp session={session} requests={requests} projects={projects} onSubmit={handleSubmit} saving={saving} />
       )}
     </div>
   );
 }
+
