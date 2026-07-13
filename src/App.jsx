@@ -153,18 +153,21 @@ const GlobalStyle = () => (
   `}</style>
 );
 
+const FALLBACK_STATUS_COLOR = { bg: '#EEF0EC', fg: '#5C6B73', bd: '#C9CFC6' };
+
 function StatusSelect({ value, onChange }) {
-  const c = STATUS_COLOR[value];
+  const c = STATUS_COLOR[value] || FALLBACK_STATUS_COLOR;
+  const safeValue = STATUS_FLOW.includes(value) ? value : STATUS_FLOW[0];
   return (
-    <select className="mrs-status-select" value={value} onChange={e => onChange(e.target.value)} style={{ background: c.bg, color: c.fg, borderColor: c.bd }}>
+    <select className="mrs-status-select" value={safeValue} onChange={e => onChange(e.target.value)} style={{ background: c.bg, color: c.fg, borderColor: c.bd }}>
       {STATUS_FLOW.map(s => <option key={s} value={s}>{s}</option>)}
     </select>
   );
 }
 
 function StatusBadge({ value }) {
-  const c = STATUS_COLOR[value];
-  return <span className="mrs-chip" style={{ background: c.bg, color: c.fg, borderColor: c.bd }}>{value}</span>;
+  const c = STATUS_COLOR[value] || FALLBACK_STATUS_COLOR;
+  return <span className="mrs-chip" style={{ background: c.bg, color: c.fg, borderColor: c.bd }}>{value || '알 수 없음'}</span>;
 }
 
 function ItemRowEditor({ item, onChange, onRemove, removable }) {
@@ -777,3 +780,4 @@ export default function App() {
     </div>
   );
 }
+
