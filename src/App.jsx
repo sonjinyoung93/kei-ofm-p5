@@ -112,6 +112,8 @@ const GlobalStyle = () => (
     .mrs-input:disabled, .mrs-select:disabled { background: #F1EFE9; color: var(--ink-soft); }
     .mrs-top-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
     @media (max-width: 480px) { .mrs-top-grid { gap: 6px; } .mrs-top-grid .mrs-field-label { font-size: 10px; } .mrs-top-grid input, .mrs-top-grid select { font-size: 12px; padding: 7px 6px; } }
+    .mrs-zone-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    @media (max-width: 480px) { .mrs-zone-grid { gap: 6px; } .mrs-zone-grid select { font-size: 12px; padding: 7px 4px; } }
     .mrs-item-row { display: grid; grid-template-columns: 1.6fr 1fr 0.7fr 0.6fr 0.7fr auto; gap: 6px; align-items: end; padding: 10px 0; border-bottom: 1px dashed var(--line); }
     @media (max-width: 480px) { .mrs-item-row { gap: 4px; } .mrs-item-row select, .mrs-item-row input { font-size: 12px; padding: 7px 3px; } }
     .mrs-btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 16px; border-radius: 2px; font-size: 14px; font-weight: 600; cursor: pointer; border: 1px solid transparent; transition: all .15s ease; }
@@ -372,16 +374,22 @@ function LoginScreen({ onLogin, loading, error }) {
 
 // ── 팀장: 자재요청 시트 ─────────────────────────────────
 function RequestForm({ session, projectName, catalog, zones, onSubmit, saving }) {
-  const [zoneName, setZoneName] = useState('');
+  const myZones = zones.filter(z => z.projectId === session.projectId);
+  const floors = [...new Set(myZones.map(z => z.floor).filter(Boolean))];
+  const [floor, setFloor] = useState('');
+  const rooms = [...new Set(myZones.filter(z => z.floor === floor).map(z => z.room).filter(Boolean))];
+  const [room, setRoom] = useState('');
+  const zoneNames = [...new Set(myZones.filter(z => z.floor === floor && z.room === room).map(z => z.zone).filter(Boolean))];
+  const [zone, setZone] = useState('');
+
   const [process, setProcess] = useState(PROCESSES[0]);
   const [note, setNote] = useState('');
   const [items, setItems] = useState([newItemRow(catalog)]);
   const [justSubmitted, setJustSubmitted] = useState(false);
 
-  useEffect(() => {
-    if (!zoneName && zones.length > 0) setZoneName(zones[0].name);
-  }, [zones]);
-
+  useEffect(() => { if (!floor && floors.length > 0) setFloor(floors[0]); }, [floors.join('|')]);
+  useEffect(() => { if (rooms.length > 0 && !rooms.includes(room)) setRoom(rooms[0]); }, [rooms.join('|')]);
+  useEffect(() => { if (zoneNames.length > 0 && !zoneNames.includes(zone)) setZone(zoneNames[0]); }, [zoneNames.join('|')]);
   useEffect(() => { setItems([newItemRow(catalog)]); }, [catalog.length]);
 
   function updateItem(id, updated) { setItems(items.map(it => it.id === id ? updated : it)); }
@@ -389,10 +397,11 @@ function RequestForm({ session, projectName, catalog, zones, onSubmit, saving })
   function removeItem(id) { if (items.length === 1) return; setItems(items.filter(it => it.id !== id)); }
 
   async function handleSubmit() {
-    if (!zoneName) { alert('구역을 선택해주세요. 관리자에게 구역 등록을 요청하세요.'); return; }
-    if (catalog.length === 0) { alert('품목이 등록되어 있지 않습니다. 관리자에게 품목 등록을 요청하세요.'); return; }
+    if (!floor || !room || !zone) { alert('구역을 모두 선택해주세요. 관리자에게 구역 등록을 요청하세요.'); return; }
+    if (catalog.length === 0) { alert('품목이 등록되어 있지 않습니다.'); return; }
     const valid = items.filter(it => it.name && it.qty !== '' && Number(it.qty) > 0);
     if (valid.length === 0) { alert('최소 1개 이상의 품목에 수량을 입력해주세요.'); return; }
+    const zoneName = `${floor} · ${room} · ${zone}`;
     const payload = {
       id: genId(), reqNo: genReqNo(), requester: session.name, username: session.username,
       projectId: session.projectId, zoneName, process, note: note.trim(), createdAt: new Date().toISOString(),
@@ -417,23 +426,35 @@ function RequestForm({ session, projectName, catalog, zones, onSubmit, saving })
         <div><label className="mrs-field-label">공정</label><select className="mrs-select" value={process} onChange={e => setProcess(e.target.value)}>{PROCESSES.map(p => <option key={p} value={p}>{p}</option>)}</select></div>
       </div>
 
-      <div style={{ marginBottom: 14 }}>
-        <label className="mrs-field-label">구역</label>
-        {zones.length === 0 ? (
-          <div style={{ padding: 10, background: '#FBE7DA', color: '#B84B10', fontSize: 13, borderRadius: 3 }}>
-            등록된 구역이 없습니다. 관리자에게 구역 등록을 요청하세요.
+      <label className="mrs-field-label">구역 (층 / 실 / 구역)</label>
+      {myZones.length === 0 ? (
+        <div style={{ padding: 10, background: '#FBE7DA', color: '#B84B10', fontSize: 13, borderRadius: 3, marginBottom: 14 }}>
+          이 프로젝트에 등록된 구역이 없습니다. 관리자에게 구역 등록을 요청하세요.
+        </div>
+      ) : (
+        <div className="mrs-zone-grid" style={{ marginBottom: 14 }}>
+          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>층</span>
+            <select className="mrs-select" value={floor} onChange={e => { setFloor(e.target.value); setRoom(''); setZone(''); }}>
+              {floors.map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
           </div>
-        ) : (
-          <select className="mrs-select" value={zoneName} onChange={e => setZoneName(e.target.value)}>
-            {zones.map(z => <option key={z.id} value={z.name}>{z.name}</option>)}
-          </select>
-        )}
-      </div>
+          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>실</span>
+            <select className="mrs-select" value={room} onChange={e => { setRoom(e.target.value); setZone(''); }}>
+              {rooms.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </div>
+          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>구역</span>
+            <select className="mrs-select" value={zone} onChange={e => setZone(e.target.value)}>
+              {zoneNames.map(z => <option key={z} value={z}>{z}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
 
       <div style={{ marginBottom: 8 }}><label className="mrs-field-label">요청 품목</label></div>
       {catalog.length === 0 ? (
         <div style={{ padding: 10, background: '#FBE7DA', color: '#B84B10', fontSize: 13, borderRadius: 3, marginBottom: 10 }}>
-          등록된 품목이 없습니다. 관리자에게 품목 등록을 요청하세요.
+          등록된 품목이 없습니다.
         </div>
       ) : (
         <>
@@ -543,12 +564,21 @@ function MyRequestList({ requests, session, projects, onConfirmReceipt, onDelete
 
 // ── 팀장: 물량반출 ──────────────────────────────────────
 function ReturnPanel({ session, projectName, catalog, zones, returns, onSubmit, saving }) {
-  const [zoneName, setZoneName] = useState('');
+  const myZones = zones.filter(z => z.projectId === session.projectId);
+  const floors = [...new Set(myZones.map(z => z.floor).filter(Boolean))];
+  const [floor, setFloor] = useState('');
+  const rooms = [...new Set(myZones.filter(z => z.floor === floor).map(z => z.room).filter(Boolean))];
+  const [room, setRoom] = useState('');
+  const zoneNames = [...new Set(myZones.filter(z => z.floor === floor && z.room === room).map(z => z.zone).filter(Boolean))];
+  const [zone, setZone] = useState('');
+
   const [reason, setReason] = useState('');
   const [items, setItems] = useState([newItemRow(catalog)]);
   const [justSubmitted, setJustSubmitted] = useState(false);
 
-  useEffect(() => { if (!zoneName && zones.length > 0) setZoneName(zones[0].name); }, [zones]);
+  useEffect(() => { if (!floor && floors.length > 0) setFloor(floors[0]); }, [floors.join('|')]);
+  useEffect(() => { if (rooms.length > 0 && !rooms.includes(room)) setRoom(rooms[0]); }, [rooms.join('|')]);
+  useEffect(() => { if (zoneNames.length > 0 && !zoneNames.includes(zone)) setZone(zoneNames[0]); }, [zoneNames.join('|')]);
   useEffect(() => { setItems([newItemRow(catalog)]); }, [catalog.length]);
 
   function updateItem(id, updated) { setItems(items.map(it => it.id === id ? updated : it)); }
@@ -556,10 +586,11 @@ function ReturnPanel({ session, projectName, catalog, zones, returns, onSubmit, 
   function removeItem(id) { if (items.length === 1) return; setItems(items.filter(it => it.id !== id)); }
 
   async function handleSubmit() {
-    if (!zoneName) { alert('구역을 선택해주세요.'); return; }
+    if (!floor || !room || !zone) { alert('구역을 모두 선택해주세요.'); return; }
     if (catalog.length === 0) { alert('품목이 등록되어 있지 않습니다.'); return; }
     const valid = items.filter(it => it.name && it.qty !== '' && Number(it.qty) > 0);
     if (valid.length === 0) { alert('최소 1개 이상의 품목에 수량을 입력해주세요.'); return; }
+    const zoneName = `${floor} · ${room} · ${zone}`;
     const payload = {
       id: genId(), reqNo: genReqNo(), requester: session.name, username: session.username,
       projectId: session.projectId, zoneName, reason: reason.trim(), createdAt: new Date().toISOString(),
@@ -592,15 +623,29 @@ function ReturnPanel({ session, projectName, catalog, zones, returns, onSubmit, 
           <span className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>RETURN REQUEST</span>
         </div>
 
-        <label className="mrs-field-label">구역</label>
-        {zones.length === 0 ? (
+        <label className="mrs-field-label">구역 (층 / 실 / 구역)</label>
+        {myZones.length === 0 ? (
           <div style={{ padding: 10, background: '#FBE7DA', color: '#B84B10', fontSize: 13, borderRadius: 3, marginBottom: 14 }}>
-            등록된 구역이 없습니다. 관리자에게 구역 등록을 요청하세요.
+            이 프로젝트에 등록된 구역이 없습니다.
           </div>
         ) : (
-          <select className="mrs-select" value={zoneName} onChange={e => setZoneName(e.target.value)} style={{ marginBottom: 14 }}>
-            {zones.map(z => <option key={z.id} value={z.name}>{z.name}</option>)}
-          </select>
+          <div className="mrs-zone-grid" style={{ marginBottom: 14 }}>
+            <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>층</span>
+              <select className="mrs-select" value={floor} onChange={e => { setFloor(e.target.value); setRoom(''); setZone(''); }}>
+                {floors.map(f => <option key={f} value={f}>{f}</option>)}
+              </select>
+            </div>
+            <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>실</span>
+              <select className="mrs-select" value={room} onChange={e => { setRoom(e.target.value); setZone(''); }}>
+                {rooms.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+            <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>구역</span>
+              <select className="mrs-select" value={zone} onChange={e => setZone(e.target.value)}>
+                {zoneNames.map(z => <option key={z} value={z}>{z}</option>)}
+              </select>
+            </div>
+          </div>
         )}
 
         <div style={{ marginBottom: 8 }}><label className="mrs-field-label">반출 품목</label></div>
@@ -661,16 +706,20 @@ function ReturnPanel({ session, projectName, catalog, zones, returns, onSubmit, 
 function LeaderApp({ session, requests, returns, projects, catalog, zones, onSubmit, onSubmitReturn, onConfirmReceipt, onDeleteRequest, saving }) {
   const [tab, setTab] = useState('form');
   const projectName = (projects.find(p => p.id === session.projectId) || {}).name || '(알 수 없음)';
+  // 팀장 자신의 반출내역만 필터링
+  const myReturns = returns.filter(r => (r.username ? r.username === session.username : r.requester === session.name));
   return (
     <div className="mrs-body">
       <div className="mrs-tabs" style={{ margin: '-20px -20px 20px', padding: '0 20px' }}>
         <button className={`mrs-tab ${tab === 'form' ? 'active' : ''}`} onClick={() => setTab('form')}><ClipboardList size={16} /> 자재요청 시트</button>
         <button className={`mrs-tab ${tab === 'mylist' ? 'active' : ''}`} onClick={() => setTab('mylist')}><ListChecks size={16} /> 요청리스트</button>
         <button className={`mrs-tab ${tab === 'return' ? 'active' : ''}`} onClick={() => setTab('return')}><PackageMinus size={16} /> 물량반출</button>
+        <button className={`mrs-tab ${tab === 'returnlist' ? 'active' : ''}`} onClick={() => setTab('returnlist')}><CalendarDays size={16} /> 반출리스트</button>
       </div>
       {tab === 'form' && <RequestForm session={session} projectName={projectName} catalog={catalog} zones={zones} onSubmit={onSubmit} saving={saving} />}
       {tab === 'mylist' && <MyRequestList requests={requests} session={session} projects={projects} onConfirmReceipt={onConfirmReceipt} onDelete={onDeleteRequest} saving={saving} />}
       {tab === 'return' && <ReturnPanel session={session} projectName={projectName} catalog={catalog} zones={zones} returns={returns} onSubmit={onSubmitReturn} saving={saving} />}
+      {tab === 'returnlist' && <ReturnsTable returns={myReturns} projects={projects} />}
     </div>
   );
 }
@@ -928,44 +977,155 @@ function ProjectManager({ projects, onSave, saving }) {
   );
 }
 
-// ── 관리 설정: 구역명 ────────────────────────────────
-function ZoneManager({ zones, onSave, saving }) {
+// ── 관리 설정: 구역명 (프로젝트/층/실/구역 + 엑셀 업로드) ──
+function ZoneManager({ zones, projects, onSave, saving }) {
   const [draft, setDraft] = useState(zones);
+  const fileRef = useRef(null);
   useEffect(() => setDraft(zones), [zones]);
-  function addRow() { setDraft([...draft, { id: genId('zone'), name: '' }]); }
+
+  function addRow() { setDraft([...draft, { id: genId('zone'), projectId: projects[0]?.id || '', floor: '', room: '', zone: '' }]); }
   function remove(idx) { setDraft(draft.filter((_, i) => i !== idx)); }
+  function update(idx, field, val) { const next = [...draft]; next[idx] = { ...next[idx], [field]: val }; setDraft(next); }
+
+  function downloadTemplate() {
+    const rows = [
+      { '프로젝트명': 'P4 Ph4 (삼성물산)', '층': '1F', '실': 'N실', '구역': 'A구역' },
+      { '프로젝트명': 'P4 Ph4 (삼성물산)', '층': '1F', '실': 'N실', '구역': 'B구역' },
+    ];
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols'] = [{ wch: 24 }, { wch: 10 }, { wch: 12 }, { wch: 14 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '구역');
+    XLSX.writeFile(wb, '구역_업로드_양식.xlsx');
+  }
+
+  function handleUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws);
+        const projectByName = {};
+        projects.forEach(p => { projectByName[p.name] = p.id; });
+        const parsed = rows.map(row => ({
+          id: genId('zone'),
+          projectId: projectByName[String(row['프로젝트명'] || row['프로젝트'] || '').trim()] || projects[0]?.id || '',
+          floor: String(row['층'] || '').trim(),
+          room: String(row['실'] || '').trim(),
+          zone: String(row['구역'] || '').trim(),
+        })).filter(z => z.floor && z.room && z.zone);
+        if (parsed.length === 0) { alert('업로드할 데이터가 없습니다. 양식을 확인해주세요.'); return; }
+        if (confirm(`${parsed.length}건의 구역을 추가할까요? (기존 구역은 유지됩니다)`)) {
+          setDraft([...draft, ...parsed]);
+        }
+      } catch (err) { alert('엑셀 읽기 실패: ' + err.message); }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = '';
+  }
+
+  const projectName = id => (projects.find(p => p.id === id) || {}).name || '-';
+
   return (
     <div className="mrs-card" style={{ padding: 18, marginBottom: 20 }}>
-      <h3 className="mrs-display" style={{ fontSize: 15, margin: '0 0 12px', fontWeight: 600 }}><MapPin size={15} style={{ verticalAlign: -2 }} /> 구역명 관리</h3>
-      <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 10 }}>팀장이 자재요청/물량반출 시 선택할 구역 목록입니다.</div>
+      <h3 className="mrs-display" style={{ fontSize: 15, margin: '0 0 12px', fontWeight: 600 }}><MapPin size={15} style={{ verticalAlign: -2 }} /> 구역 관리 (프로젝트/층/실/구역)</h3>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <button className="mrs-btn mrs-btn-ghost" onClick={addRow}><Plus size={15} /> 구역 추가</button>
+        <button className="mrs-btn mrs-btn-primary" onClick={() => fileRef.current?.click()}><Download size={15} style={{ transform: 'rotate(180deg)' }} /> 엑셀 업로드</button>
+        <button className="mrs-btn mrs-btn-ghost" onClick={downloadTemplate}><Download size={15} /> 양식 다운로드</button>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleUpload} />
+      </div>
+
       {draft.length === 0 ? (
         <div style={{ fontSize: 13, color: 'var(--ink-soft)', padding: '10px 0' }}>등록된 구역이 없습니다.</div>
-      ) : draft.map((z, idx) => (
-        <div key={z.id} style={{ display: 'flex', gap: 10, marginBottom: 8, alignItems: 'center' }}>
-          <input className="mrs-input" value={z.name} onChange={e => { const next = [...draft]; next[idx] = { ...z, name: e.target.value }; setDraft(next); }} placeholder="예: A블록 1존" />
-          <button className="mrs-btn mrs-btn-danger" onClick={() => remove(idx)} style={{ padding: 8 }}><Trash2 size={15} /></button>
-        </div>
-      ))}
-      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-        <button className="mrs-btn mrs-btn-ghost" onClick={addRow}><Plus size={15} /> 구역 추가</button>
-        <button className="mrs-btn mrs-btn-primary" disabled={saving || draft.some(z => !z.name.trim())} onClick={() => onSave(draft)}><Save size={15} /> 저장</button>
-      </div>
+      ) : (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 0.8fr 1fr 1fr auto', gap: 6, marginBottom: 4 }}>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>프로젝트</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>층</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>실</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>구역</span>
+            <span></span>
+          </div>
+          {draft.map((z, idx) => (
+            <div key={z.id} style={{ display: 'grid', gridTemplateColumns: '1.5fr 0.8fr 1fr 1fr auto', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+              <select className="mrs-select" value={z.projectId} onChange={e => update(idx, 'projectId', e.target.value)}>
+                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <input className="mrs-input" value={z.floor} onChange={e => update(idx, 'floor', e.target.value)} placeholder="1F" />
+              <input className="mrs-input" value={z.room} onChange={e => update(idx, 'room', e.target.value)} placeholder="N실" />
+              <input className="mrs-input" value={z.zone} onChange={e => update(idx, 'zone', e.target.value)} placeholder="A구역" />
+              <button className="mrs-btn mrs-btn-danger" onClick={() => remove(idx)} style={{ padding: 8 }}><Trash2 size={15} /></button>
+            </div>
+          ))}
+        </>
+      )}
+      <button className="mrs-btn mrs-btn-primary" style={{ marginTop: 10 }} disabled={saving || draft.some(z => !z.floor.trim() || !z.room.trim() || !z.zone.trim() || !z.projectId)} onClick={() => onSave(draft)}><Save size={15} /> 전체 저장</button>
     </div>
   );
 }
 
-// ── 관리 설정: 품목/규격/색상/단위 ────────────────────────
+// ── 관리 설정: 품목/규격/색상/단위 (+ 엑셀 업로드) ──────────
 function CatalogManager({ catalog, onSave, saving }) {
   const [draft, setDraft] = useState(catalog);
+  const fileRef = useRef(null);
   useEffect(() => setDraft(catalog), [catalog]);
+
   function addRow() { setDraft([...draft, { id: genId('cat'), name: '', spec: '', color: 'N/A', unit: 'EA' }]); }
   function remove(idx) { setDraft(draft.filter((_, i) => i !== idx)); }
   function update(idx, field, val) { const next = [...draft]; next[idx] = { ...next[idx], [field]: val }; setDraft(next); }
 
+  function downloadTemplate() {
+    const rows = [
+      { '품목명': '무나사전선관', '규격': 'E19', '색상': 'N/A', '단위': '본' },
+      { '품목명': '통신케이블', '규격': '14TP', '색상': '적', '단위': '롤' },
+    ];
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 8 }, { wch: 8 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '품목');
+    XLSX.writeFile(wb, '품목_업로드_양식.xlsx');
+  }
+
+  function handleUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws);
+        const parsed = rows.map(row => ({
+          id: genId('cat'),
+          name: String(row['품목명'] || row['품목'] || '').trim(),
+          spec: String(row['규격'] || '').trim(),
+          color: String(row['색상'] || 'N/A').trim() || 'N/A',
+          unit: String(row['단위'] || 'EA').trim() || 'EA',
+        })).filter(it => it.name && it.spec);
+        if (parsed.length === 0) { alert('업로드할 데이터가 없습니다.'); return; }
+        if (confirm(`${parsed.length}건의 품목을 추가할까요? (기존 품목은 유지됩니다)`)) {
+          setDraft([...draft, ...parsed]);
+        }
+      } catch (err) { alert('엑셀 읽기 실패: ' + err.message); }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = '';
+  }
+
   return (
     <div className="mrs-card" style={{ padding: 18, marginBottom: 20 }}>
       <h3 className="mrs-display" style={{ fontSize: 15, margin: '0 0 12px', fontWeight: 600 }}><Package size={15} style={{ verticalAlign: -2 }} /> 품목 관리</h3>
-      <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 10 }}>팀장이 요청 시 선택할 품목/규격/색상/단위입니다. 색상이 없는 품목은 N/A로 두세요.</div>
+      <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 10 }}>색상이 없는 품목은 N/A로 두세요.</div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <button className="mrs-btn mrs-btn-ghost" onClick={addRow}><Plus size={15} /> 품목 추가</button>
+        <button className="mrs-btn mrs-btn-primary" onClick={() => fileRef.current?.click()}><Download size={15} style={{ transform: 'rotate(180deg)' }} /> 엑셀 업로드</button>
+        <button className="mrs-btn mrs-btn-ghost" onClick={downloadTemplate}><Download size={15} /> 양식 다운로드</button>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleUpload} />
+      </div>
 
       {draft.length === 0 ? (
         <div style={{ fontSize: 13, color: 'var(--ink-soft)', padding: '10px 0' }}>등록된 품목이 없습니다.</div>
@@ -991,10 +1151,7 @@ function CatalogManager({ catalog, onSave, saving }) {
           ))}
         </>
       )}
-      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-        <button className="mrs-btn mrs-btn-ghost" onClick={addRow}><Plus size={15} /> 품목 추가</button>
-        <button className="mrs-btn mrs-btn-primary" disabled={saving || draft.some(it => !it.name.trim() || !it.spec.trim())} onClick={() => onSave(draft)}><Save size={15} /> 저장</button>
-      </div>
+      <button className="mrs-btn mrs-btn-primary" style={{ marginTop: 10 }} disabled={saving || draft.some(it => !it.name.trim() || !it.spec.trim())} onClick={() => onSave(draft)}><Save size={15} /> 전체 저장</button>
     </div>
   );
 }
@@ -1102,25 +1259,27 @@ function AdminAccountManager({ session, onUpdate, saving }) {
   );
 }
 
-// ── 관리자 전체 화면 ────────────────────────────────────
-function AdminApp({ session, requests, returns, projects, users, zones, catalog, onUpdateStatus, onDelete, onSaveProjects, onSaveZones, onSaveCatalog, onAddUser, onUpdateUser, onDeleteUser, savingSettings }) {
-  const [tab, setTab] = useState('today');
+// ── 관리자 전체 화면 (자재팀과 동일한 구성 + 관리 설정) ───
+function AdminApp({ session, requests, returns, projects, users, zones, catalog, onUpdateStatus, onDelete, onSaveProjects, onSaveZones, onSaveCatalog, onAddUser, onUpdateUser, onDeleteUser, onConfirmReturn, savingSettings }) {
+  const [tab, setTab] = useState('outbound');
   return (
     <div className="mrs-body">
       <div className="mrs-tabs" style={{ margin: '-20px -20px 20px', padding: '0 20px' }}>
-        <button className={`mrs-tab ${tab === 'today' ? 'active' : ''}`} onClick={() => setTab('today')}><CalendarDays size={16} /> 금일 자재요청</button>
+        <button className={`mrs-tab ${tab === 'outbound' ? 'active' : ''}`} onClick={() => setTab('outbound')}><ClipboardList size={16} /> 발주확인 대기</button>
         <button className={`mrs-tab ${tab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}><LayoutDashboard size={16} /> 누계 요청리스트</button>
-        <button className={`mrs-tab ${tab === 'returns' ? 'active' : ''}`} onClick={() => setTab('returns')}><PackageMinus size={16} /> 누계 반출리스트</button>
+        <button className={`mrs-tab ${tab === 'return' ? 'active' : ''}`} onClick={() => setTab('return')}><PackageMinus size={16} /> 반출확인 대기</button>
+        <button className={`mrs-tab ${tab === 'returns' ? 'active' : ''}`} onClick={() => setTab('returns')}><CalendarDays size={16} /> 누계 반출리스트</button>
         <button className={`mrs-tab ${tab === 'manage' ? 'active' : ''}`} onClick={() => setTab('manage')}><Users size={16} /> 관리 설정</button>
       </div>
 
-      {tab === 'today' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="today" allowPdf />}
+      {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} />}
       {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" allowPdf />}
+      {tab === 'return' && <MaterialReturns returns={returns} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
       {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} />}
       {tab === 'manage' && (
         <div>
           <ProjectManager projects={projects} onSave={onSaveProjects} saving={savingSettings} />
-          <ZoneManager zones={zones} onSave={onSaveZones} saving={savingSettings} />
+          <ZoneManager zones={zones} projects={projects} onSave={onSaveZones} saving={savingSettings} />
           <CatalogManager catalog={catalog} onSave={onSaveCatalog} saving={savingSettings} />
           <StaffManager users={users} projects={projects} onAdd={onAddUser} onUpdate={onUpdateUser} onDelete={onDeleteUser} saving={savingSettings} />
           <AdminAccountManager session={session} onUpdate={onUpdateUser} saving={savingSettings} />
@@ -1321,6 +1480,19 @@ export default function App() {
     finally { setSaving(false); }
   }
 
+  // 관리자 비밀번호 확인 후 요청 삭제
+  async function handleDeleteWithPassword(reqId) {
+    const pwd = prompt('정말 삭제하시겠습니까?\n관리자 비밀번호를 입력해주세요.');
+    if (pwd === null) return; // 취소
+    if (!pwd) { alert('비밀번호를 입력해주세요.'); return; }
+    // 서버에 재로그인으로 비밀번호 검증
+    try {
+      const check = await apiPost('login', { username: session.username, password: pwd });
+      if (check.error) { alert('비밀번호가 올바르지 않습니다.'); return; }
+    } catch (e) { alert('비밀번호 확인 중 오류가 발생했습니다.'); return; }
+    await handleDelete(reqId);
+  }
+
   async function handleSubmitReturn(payload) {
     setReturns([{ ...payload, status: '반출요청' }, ...returns]);
     setSaving(true); setError(null);
@@ -1434,7 +1606,7 @@ export default function App() {
       ) : session.role === 'admin' ? (
         <AdminApp
           session={session} requests={requests} returns={returns} projects={projects} users={users} zones={zones} catalog={catalog}
-          onUpdateStatus={handleUpdateStatus} onDelete={handleDelete}
+          onUpdateStatus={handleUpdateStatus} onDelete={handleDeleteWithPassword} onConfirmReturn={handleConfirmReturn}
           onSaveProjects={handleSaveProjects} onSaveZones={handleSaveZones} onSaveCatalog={handleSaveCatalog}
           onAddUser={handleAddUser} onUpdateUser={handleUpdateUser} onDeleteUser={handleDeleteUser}
           savingSettings={savingSettings}
