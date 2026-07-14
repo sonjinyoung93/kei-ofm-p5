@@ -1,52 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
-import { Plus, Trash2, Download, ClipboardList, LayoutDashboard, Loader2, AlertCircle, CheckCircle2, X, Settings, Save, LogOut, Building2, Users, ListChecks, CalendarDays, Lock, PenLine, PackageMinus } from 'lucide-react';
+import { NanumGothicBase64 } from './NanumGothicFont';
+import { Plus, Trash2, Download, ClipboardList, LayoutDashboard, Loader2, AlertCircle, CheckCircle2, X, Save, LogOut, Building2, Users, ListChecks, CalendarDays, Lock, PenLine, PackageMinus, RefreshCw, MapPin, Package } from 'lucide-react';
 
-const ROWS = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
-const COLS = Array.from({ length: 70 }, (_, i) => String(i + 1));
-const FLOORS = Array.from({ length: 12 }, (_, i) => `${i + 1}F`);
+const UNITS = ['EA', 'M', 'SET', 'BOX', 'ROLL', 'KG', '본', '롤'];
 const PROCESSES = ['자탐', '유도등', '무통'];
-const UNITS = ['EA', 'M', 'SET', 'BOX', 'ROLL', 'KG'];
 const STATUS_FLOW = ['요청됨', '확인됨', '입고완료'];
+const RETURN_STATUS_FLOW = ['반출요청', '반출확인완료'];
 const STATUS_COLOR = {
-  '요청됨':   { bg: '#EEF0EC', fg: '#5C6B73', bd: '#C9CFC6' },
-  '확인됨':   { bg: '#E3ECF5', fg: '#2B5A8C', bd: '#9FBEDC' },
-  '입고완료': { bg: '#E1EBE3', fg: '#2E6B47', bd: '#9FC7AC' },
+  '요청됨':       { bg: '#EEF0EC', fg: '#5C6B73', bd: '#C9CFC6' },
+  '확인됨':       { bg: '#E3ECF5', fg: '#2B5A8C', bd: '#9FBEDC' },
+  '입고완료':     { bg: '#E1EBE3', fg: '#2E6B47', bd: '#9FC7AC' },
+  '반출요청':     { bg: '#FBE7DA', fg: '#B84B10', bd: '#F0A97A' },
+  '반출확인완료': { bg: '#E1EBE3', fg: '#2E6B47', bd: '#9FC7AC' },
 };
-
-const CATALOG = [
-  { name: '무나사전선관', spec: 'E19', color: 'N/A' },
-  { name: '무나사전선관', spec: 'E25', color: 'N/A' },
-  { name: '무나사전선관', spec: 'E31', color: 'N/A' },
-  { name: '무나사전선관', spec: 'E39', color: 'N/A' },
-  { name: '커플링', spec: 'E19', color: 'N/A' },
-  { name: '커플링', spec: 'E25', color: 'N/A' },
-  { name: '커플링', spec: 'E31', color: 'N/A' },
-  { name: '커플링', spec: 'E39', color: 'N/A' },
-  { name: '박스커넥터', spec: 'E19', color: 'N/A' },
-  { name: '박스커넥터', spec: 'E25', color: 'N/A' },
-  { name: '박스커넥터', spec: 'E31', color: 'N/A' },
-  { name: '박스커넥터', spec: 'E39', color: 'N/A' },
-  { name: '통신케이블', spec: '14TP', color: '적' },
-  { name: '통신케이블', spec: '14TP', color: '흑' },
-  { name: '통신케이블', spec: '16TSP', color: '황' },
-  { name: '내화케이블', spec: '4mm 3C', color: 'N/A' },
-  { name: '내화케이블', spec: '4mm 2C', color: 'N/A' },
-  { name: '내화케이블', spec: '2.5mm 2C', color: 'N/A' },
-];
-const CATALOG_NAMES = [...new Set(CATALOG.map(c => c.name))];
-function getSpecs(name) { return [...new Set(CATALOG.filter(c => c.name === name).map(c => c.spec))]; }
-function getColors(name, spec) { return [...new Set(CATALOG.filter(c => c.name === name && c.spec === spec).map(c => c.color))]; }
-
-const ITEM_UNITS = {
-  '무나사전선관': ['본', 'M'],
-  '커플링': ['EA', 'BOX'],
-  '박스커넥터': ['EA', 'BOX'],
-  '통신케이블': ['롤', 'M'],
-  '내화케이블': ['M'],
-};
-function getUnits(name) { return ITEM_UNITS[name] || UNITS; }
+const FALLBACK_STATUS_COLOR = { bg: '#EEF0EC', fg: '#5C6B73', bd: '#C9CFC6' };
 
 const DEFAULT_PROJECTS = [
   { id: 'proj-1', name: 'P4 Ph4 (삼성물산)' },
@@ -78,9 +47,11 @@ function genReqNo() {
   const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
   return `MRS-${stamp}-${rand}`;
 }
-function genId() { return Math.random().toString(36).slice(2, 10); }
+function genId(prefix = '') { return (prefix ? prefix + '-' : '') + Math.random().toString(36).slice(2, 10); }
 function fmtDate(iso) {
+  if (!iso) return '';
   const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
   return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 function isToday(iso) {
@@ -88,143 +59,25 @@ function isToday(iso) {
   const now = new Date();
   return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
 }
-function fmtZone(rowFrom, rowTo, colFrom, colTo) {
-  const rowPart = rowFrom === rowTo ? `${rowFrom}행` : `${rowFrom}~${rowTo}행`;
-  const colPart = colFrom === colTo ? `${colFrom}열` : `${colFrom}~${colTo}열`;
-  return `${rowPart} ${colPart}`;
+
+// ── 카탈로그 유틸 ─────────────────────────────────────────
+function catalogNames(catalog) { return [...new Set(catalog.map(c => c.name))]; }
+function catalogSpecs(catalog, name) { return [...new Set(catalog.filter(c => c.name === name).map(c => c.spec))]; }
+function catalogColors(catalog, name, spec) { return [...new Set(catalog.filter(c => c.name === name && c.spec === spec).map(c => c.color))]; }
+function catalogUnit(catalog, name, spec, color) {
+  const found = catalog.find(c => c.name === name && c.spec === spec && c.color === color);
+  return found ? found.unit : 'EA';
 }
-function rowToNum(r) { return r ? r.charCodeAt(0) - 64 : null; }
-// req의 구역이 order의 구역 범위 안에 완전히 포함되는지 확인
-function zoneContained(req, order) {
-  if (!req.rowFrom || !req.rowTo || !req.colFrom || !req.colTo) return false;
-  if (!order.rowFrom || !order.rowTo || !order.colFrom || !order.colTo) return false;
-  if ((req.floor || '') !== (order.floor || '')) return false;
-  const rF = rowToNum(req.rowFrom), rT = rowToNum(req.rowTo);
-  const cF = Number(req.colFrom), cT = Number(req.colTo);
-  const oRF = rowToNum(order.rowFrom), oRT = rowToNum(order.rowTo);
-  const oCF = Number(order.colFrom), oCT = Number(order.colTo);
-  return rF >= oRF && rT <= oRT && cF >= oCF && cT <= oCT;
-}
-function sameItem(a, b) { return a.name === b.itemName && a.spec === b.itemSpec && a.color === b.itemColor; }
-
-// ── 손글씨 서명패드 ──────────────────────────────────────
-function SignaturePad({ onChange }) {
-  const canvasRef = useRef(null);
-  const drawing = useRef(false);
-  const [empty, setEmpty] = useState(true);
-
-  function getPos(e, canvas) {
-    const rect = canvas.getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-  }
-  function start(e) {
-    drawing.current = true;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    const { x, y } = getPos(e, canvas);
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-  }
-  function move(e) {
-    if (!drawing.current) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    const { x, y } = getPos(e, canvas);
-    ctx.lineTo(x, y);
-    ctx.strokeStyle = '#1C2A33';
-    ctx.lineWidth = 2.2;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-    if (empty) setEmpty(false);
-  }
-  function end() {
-    if (!drawing.current) return;
-    drawing.current = false;
-    const canvas = canvasRef.current;
-    onChange(canvas.toDataURL('image/png'));
-  }
-  function clear() {
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    setEmpty(true);
-    onChange('');
-  }
-
-  return (
-    <div>
-      <canvas
-        ref={canvasRef} width={280} height={120}
-        style={{ width: '100%', maxWidth: 280, height: 120, background: '#fff', border: '1px solid var(--line)', borderRadius: 4, touchAction: 'none', cursor: 'crosshair' }}
-        onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerLeave={end}
-      />
-      <button type="button" className="mrs-btn mrs-btn-ghost" style={{ marginTop: 6, padding: '4px 10px', fontSize: 12 }} onClick={clear}>지우고 다시 서명</button>
-    </div>
-  );
-}
-
-// ── 거래명세표 / 반출확인서 PDF 생성 ──────────────────────
-function generateDocPdf({ title, docNo, dateStr, projectName, zoneStr, items, deliverLabel, deliverName, deliverSignature, receiveLabel, receiveName, receiveSignature }) {
-  const doc = new jsPDF({ unit: 'mm', format: 'a5' });
-  const pw = doc.internal.pageSize.getWidth();
-  let y = 16;
-
-  doc.setFontSize(16);
-  doc.text(title, pw / 2, y, { align: 'center' });
-  y += 6;
-  doc.setFontSize(9);
-  doc.setTextColor(120);
-  doc.text(docNo, pw / 2, y, { align: 'center' });
-  doc.setTextColor(0);
-  y += 10;
-
-  doc.setFontSize(10);
-  doc.text(`일자: ${dateStr}`, 14, y);
-  doc.text(`프로젝트: ${projectName || '-'}`, pw - 14, y, { align: 'right' });
-  y += 6;
-  doc.text(`구역: ${zoneStr || '-'}`, 14, y);
-  y += 8;
-
-  doc.setDrawColor(200);
-  doc.line(14, y, pw - 14, y);
-  y += 6;
-  doc.setFontSize(9);
-  doc.text('품목', 14, y); doc.text('규격', 60, y); doc.text('수량', pw - 14, y, { align: 'right' });
-  y += 4;
-  doc.line(14, y, pw - 14, y);
-  y += 6;
-  items.forEach(it => {
-    doc.text(String(it.name), 14, y);
-    doc.text(String(it.spec || '-'), 60, y);
-    doc.text(`${it.qty} ${it.unit}`, pw - 14, y, { align: 'right' });
-    y += 6;
-  });
-  y += 6;
-
-  const boxW = (pw - 14 * 2 - 8) / 2;
-  const boxH = 40;
-  doc.setDrawColor(150);
-  doc.rect(14, y, boxW, boxH);
-  doc.rect(14 + boxW + 8, y, boxW, boxH);
-  doc.setFontSize(9);
-  doc.text(deliverLabel, 14 + boxW / 2, y + 6, { align: 'center' });
-  doc.text(receiveLabel, 14 + boxW + 8 + boxW / 2, y + 6, { align: 'center' });
-  if (deliverSignature) { try { doc.addImage(deliverSignature, 'PNG', 16, y + 9, boxW - 4, boxH - 18); } catch (e) {} }
-  if (receiveSignature) { try { doc.addImage(receiveSignature, 'PNG', 14 + boxW + 10, y + 9, boxW - 4, boxH - 18); } catch (e) {} }
-  doc.setFontSize(8);
-  doc.text(deliverName || '', 14 + boxW / 2, y + boxH - 3, { align: 'center' });
-  doc.text(receiveName || '', 14 + boxW + 8 + boxW / 2, y + boxH - 3, { align: 'center' });
-
-  doc.save(`${title}_${docNo}.pdf`);
-}
-function newItemRow() {
-  const name = CATALOG_NAMES[0];
-  const spec = getSpecs(name)[0];
-  const color = getColors(name, spec)[0];
-  const unit = getUnits(name)[0];
+function newItemRow(catalog) {
+  if (catalog.length === 0) return { id: genId(), name: '', spec: '', color: 'N/A', qty: '', unit: 'EA' };
+  const name = catalogNames(catalog)[0];
+  const spec = catalogSpecs(catalog, name)[0];
+  const color = catalogColors(catalog, name, spec)[0];
+  const unit = catalogUnit(catalog, name, spec, color);
   return { id: genId(), name, spec, color, qty: '', unit };
 }
 
+// ── 글로벌 CSS ──────────────────────────────────────────
 const GlobalStyle = () => (
   <style>{`
     @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
@@ -245,8 +98,8 @@ const GlobalStyle = () => (
     .mrs-project-chip b { color: #EDEAE0; font-weight: 600; font-size: 13px; }
     .mrs-header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .mrs-user-chip { font-size: 12px; color: #C9CFC6; display: flex; align-items: center; gap: 6px; }
-    .mrs-logout-btn { display: flex; align-items: center; gap: 6px; background: none; border: 1px solid #3A4954; color: #C9CFC6; border-radius: 20px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
-    .mrs-logout-btn:hover { border-color: var(--accent); color: #EDEAE0; }
+    .mrs-logout-btn, .mrs-refresh-btn { display: flex; align-items: center; gap: 6px; background: none; border: 1px solid #3A4954; color: #C9CFC6; border-radius: 20px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
+    .mrs-logout-btn:hover, .mrs-refresh-btn:hover { border-color: var(--accent); color: #EDEAE0; }
     .mrs-tabs { display: flex; gap: 0; background: var(--card); border-bottom: 1px solid var(--line); padding: 0 16px; flex-wrap: wrap; }
     .mrs-tab { display: flex; align-items: center; gap: 7px; padding: 12px 18px; font-size: 14px; font-weight: 600; color: var(--ink-soft); cursor: pointer; border-bottom: 3px solid transparent; transition: all .15s ease; background: none; border-top:none; border-left:none; border-right:none; }
     .mrs-tab.active { color: var(--ink); border-bottom-color: var(--accent); }
@@ -259,9 +112,6 @@ const GlobalStyle = () => (
     .mrs-input:disabled, .mrs-select:disabled { background: #F1EFE9; color: var(--ink-soft); }
     .mrs-top-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
     @media (max-width: 480px) { .mrs-top-grid { gap: 6px; } .mrs-top-grid .mrs-field-label { font-size: 10px; } .mrs-top-grid input, .mrs-top-grid select { font-size: 12px; padding: 7px 6px; } }
-    .mrs-zone-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; }
-    .mrs-zone-grid-5 { grid-template-columns: 1fr 1fr 1fr 1fr 1fr; }
-    @media (max-width: 480px) { .mrs-zone-grid { gap: 5px; } .mrs-zone-grid select { font-size: 12px; padding: 7px 3px; } .mrs-zone-grid-5 select { font-size: 11px; padding: 6px 1px; } }
     .mrs-item-row { display: grid; grid-template-columns: 1.6fr 1fr 0.7fr 0.6fr 0.7fr auto; gap: 6px; align-items: end; padding: 10px 0; border-bottom: 1px dashed var(--line); }
     @media (max-width: 480px) { .mrs-item-row { gap: 4px; } .mrs-item-row select, .mrs-item-row input { font-size: 12px; padding: 7px 3px; } }
     .mrs-btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 16px; border-radius: 2px; font-size: 14px; font-weight: 600; cursor: pointer; border: 1px solid transparent; transition: all .15s ease; }
@@ -291,44 +141,198 @@ const GlobalStyle = () => (
   `}</style>
 );
 
-const FALLBACK_STATUS_COLOR = { bg: '#EEF0EC', fg: '#5C6B73', bd: '#C9CFC6' };
-
-function StatusSelect({ value, onChange }) {
-  const c = STATUS_COLOR[value] || FALLBACK_STATUS_COLOR;
-  const safeValue = STATUS_FLOW.includes(value) ? value : STATUS_FLOW[0];
-  return (
-    <select className="mrs-status-select" value={safeValue} onChange={e => onChange(e.target.value)} style={{ background: c.bg, color: c.fg, borderColor: c.bd }}>
-      {STATUS_FLOW.map(s => <option key={s} value={s}>{s}</option>)}
-    </select>
-  );
-}
-
 function StatusBadge({ value }) {
   const c = STATUS_COLOR[value] || FALLBACK_STATUS_COLOR;
   return <span className="mrs-chip" style={{ background: c.bg, color: c.fg, borderColor: c.bd }}>{value || '알 수 없음'}</span>;
 }
 
-function ItemRowEditor({ item, onChange, onRemove, removable }) {
-  const specs = getSpecs(item.name);
-  const colors = getColors(item.name, item.spec);
-  const units = getUnits(item.name);
+function StatusSelect({ value, options, onChange }) {
+  const c = STATUS_COLOR[value] || FALLBACK_STATUS_COLOR;
+  const safe = options.includes(value) ? value : options[0];
+  return (
+    <select className="mrs-status-select" value={safe} onChange={e => onChange(e.target.value)} style={{ background: c.bg, color: c.fg, borderColor: c.bd }}>
+      {options.map(s => <option key={s} value={s}>{s}</option>)}
+    </select>
+  );
+}
+
+// ── 서명패드 ─────────────────────────────────────────────
+function SignaturePad({ onChange }) {
+  const canvasRef = useRef(null);
+  const drawing = useRef(false);
+  function getPos(e, canvas) {
+    const rect = canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+  function start(e) {
+    drawing.current = true;
+    const ctx = canvasRef.current.getContext('2d');
+    const { x, y } = getPos(e, canvasRef.current);
+    ctx.beginPath(); ctx.moveTo(x, y);
+  }
+  function move(e) {
+    if (!drawing.current) return;
+    const ctx = canvasRef.current.getContext('2d');
+    const { x, y } = getPos(e, canvasRef.current);
+    ctx.lineTo(x, y); ctx.strokeStyle = '#1C2A33'; ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.stroke();
+  }
+  function end() {
+    if (!drawing.current) return;
+    drawing.current = false;
+    onChange(canvasRef.current.toDataURL('image/png'));
+  }
+  function clear() {
+    const canvas = canvasRef.current;
+    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    onChange('');
+  }
+  return (
+    <div>
+      <canvas
+        ref={canvasRef} width={280} height={120}
+        style={{ width: '100%', maxWidth: 280, height: 120, background: '#fff', border: '1px solid var(--line)', borderRadius: 4, touchAction: 'none', cursor: 'crosshair' }}
+        onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerLeave={end}
+      />
+      <button type="button" className="mrs-btn mrs-btn-ghost" style={{ marginTop: 6, padding: '4px 10px', fontSize: 12 }} onClick={clear}>지우고 다시 서명</button>
+    </div>
+  );
+}
+
+function ConfirmSignaturePanel({ deliverLabel, receiveLabel, deliverNameDefault, receiveNameDefault, onCancel, onSubmit, saving }) {
+  const [deliverName, setDeliverName] = useState(deliverNameDefault || '');
+  const [receiveName, setReceiveName] = useState(receiveNameDefault || '');
+  const [deliverSig, setDeliverSig] = useState('');
+  const [receiveSig, setReceiveSig] = useState('');
+  function submit() {
+    if (!deliverName.trim() || !receiveName.trim()) { alert('인도자, 인수자 이름을 모두 입력해주세요.'); return; }
+    if (!deliverSig || !receiveSig) { alert('양쪽 서명을 모두 받아주세요.'); return; }
+    onSubmit({ deliverName: deliverName.trim(), deliverSignature: deliverSig, receiveName: receiveName.trim(), receiveSignature: receiveSig });
+  }
+  return (
+    <div className="mrs-card" style={{ padding: 16, marginTop: 10, background: '#F1EFE9' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        <div>
+          <label className="mrs-field-label">{deliverLabel}</label>
+          <input className="mrs-input" value={deliverName} onChange={e => setDeliverName(e.target.value)} placeholder="이름" style={{ marginBottom: 8 }} />
+          <SignaturePad onChange={setDeliverSig} />
+        </div>
+        <div>
+          <label className="mrs-field-label">{receiveLabel}</label>
+          <input className="mrs-input" value={receiveName} onChange={e => setReceiveName(e.target.value)} placeholder="이름" style={{ marginBottom: 8 }} />
+          <SignaturePad onChange={setReceiveSig} />
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+        <button className="mrs-btn mrs-btn-primary" onClick={submit} disabled={saving}><PenLine size={15} /> 서명 완료 및 확인</button>
+        <button className="mrs-btn mrs-btn-ghost" onClick={onCancel}>취소</button>
+      </div>
+    </div>
+  );
+}
+
+// ── PDF 생성 (한글 폰트 임베드) ────────────────────────────
+let pdfFontLoaded = false;
+function ensurePdfFont(doc) {
+  if (!pdfFontLoaded) {
+    doc.addFileToVFS('NanumGothic.ttf', NanumGothicBase64);
+    doc.addFont('NanumGothic.ttf', 'NanumGothic', 'normal');
+    pdfFontLoaded = true;
+  }
+  doc.setFont('NanumGothic');
+}
+
+function generateDocPdf({ title, docNo, dateStr, projectName, zoneStr, items, deliverLabel, deliverName, deliverSignature, receiveLabel, receiveName, receiveSignature }) {
+  const doc = new jsPDF({ unit: 'mm', format: 'a5' });
+  // 한글 폰트를 매 인스턴스마다 등록
+  doc.addFileToVFS('NanumGothic.ttf', NanumGothicBase64);
+  doc.addFont('NanumGothic.ttf', 'NanumGothic', 'normal');
+  doc.setFont('NanumGothic');
+
+  const pw = doc.internal.pageSize.getWidth();
+  let y = 16;
+
+  doc.setFontSize(16);
+  doc.text(title, pw / 2, y, { align: 'center' });
+  y += 6;
+  doc.setFontSize(9);
+  doc.setTextColor(120);
+  doc.text(docNo, pw / 2, y, { align: 'center' });
+  doc.setTextColor(0);
+  y += 10;
+
+  doc.setFontSize(10);
+  doc.text(`일자: ${dateStr}`, 14, y);
+  doc.text(`프로젝트: ${projectName || '-'}`, pw - 14, y, { align: 'right' });
+  y += 6;
+  doc.text(`구역: ${zoneStr || '-'}`, 14, y);
+  y += 8;
+
+  doc.setDrawColor(200);
+  doc.line(14, y, pw - 14, y);
+  y += 6;
+  doc.setFontSize(9);
+  doc.text('품목', 14, y);
+  doc.text('규격', 55, y);
+  doc.text('색상', 85, y);
+  doc.text('수량', pw - 14, y, { align: 'right' });
+  y += 4;
+  doc.line(14, y, pw - 14, y);
+  y += 6;
+  items.forEach(it => {
+    doc.text(String(it.name || ''), 14, y);
+    doc.text(String(it.spec || '-'), 55, y);
+    doc.text(String(it.color || '-'), 85, y);
+    doc.text(`${it.qty} ${it.unit}`, pw - 14, y, { align: 'right' });
+    y += 6;
+  });
+  y += 6;
+
+  const boxW = (pw - 14 * 2 - 8) / 2;
+  const boxH = 40;
+  doc.setDrawColor(150);
+  doc.rect(14, y, boxW, boxH);
+  doc.rect(14 + boxW + 8, y, boxW, boxH);
+  doc.setFontSize(9);
+  doc.text(deliverLabel, 14 + boxW / 2, y + 6, { align: 'center' });
+  doc.text(receiveLabel, 14 + boxW + 8 + boxW / 2, y + 6, { align: 'center' });
+  if (deliverSignature) { try { doc.addImage(deliverSignature, 'PNG', 16, y + 9, boxW - 4, boxH - 18); } catch (e) {} }
+  if (receiveSignature) { try { doc.addImage(receiveSignature, 'PNG', 14 + boxW + 10, y + 9, boxW - 4, boxH - 18); } catch (e) {} }
+  doc.setFontSize(8);
+  doc.text(deliverName || '', 14 + boxW / 2, y + boxH - 3, { align: 'center' });
+  doc.text(receiveName || '', 14 + boxW + 8 + boxW / 2, y + boxH - 3, { align: 'center' });
+
+  doc.save(`${title}_${docNo}.pdf`);
+}
+
+// ── 품목 행 편집기 (카탈로그 기반) ────────────────────────
+function ItemRowEditor({ item, catalog, onChange, onRemove, removable }) {
+  const names = catalogNames(catalog);
+  const specs = catalogSpecs(catalog, item.name);
+  const colors = catalogColors(catalog, item.name, item.spec);
+
   function handleNameChange(name) {
-    const spec = getSpecs(name)[0];
-    const color = getColors(name, spec)[0];
-    const unit = getUnits(name)[0];
+    const spec = catalogSpecs(catalog, name)[0] || '';
+    const color = catalogColors(catalog, name, spec)[0] || 'N/A';
+    const unit = catalogUnit(catalog, name, spec, color);
     onChange({ ...item, name, spec, color, unit });
   }
   function handleSpecChange(spec) {
-    const color = getColors(item.name, spec)[0];
-    onChange({ ...item, spec, color });
+    const color = catalogColors(catalog, item.name, spec)[0] || 'N/A';
+    const unit = catalogUnit(catalog, item.name, spec, color);
+    onChange({ ...item, spec, color, unit });
   }
+  function handleColorChange(color) {
+    const unit = catalogUnit(catalog, item.name, item.spec, color);
+    onChange({ ...item, color, unit });
+  }
+
   return (
     <div className="mrs-item-row">
-      <div><select className="mrs-select" value={item.name} onChange={e => handleNameChange(e.target.value)}>{CATALOG_NAMES.map(n => <option key={n} value={n}>{n}</option>)}</select></div>
+      <div><select className="mrs-select" value={item.name} onChange={e => handleNameChange(e.target.value)}>{names.length === 0 ? <option value="">품목 없음</option> : names.map(n => <option key={n} value={n}>{n}</option>)}</select></div>
       <div><select className="mrs-select" value={item.spec} onChange={e => handleSpecChange(e.target.value)}>{specs.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
       <div><input className="mrs-input" type="number" min="0" value={item.qty} onChange={e => onChange({ ...item, qty: e.target.value })} placeholder="0" /></div>
-      <div><select className="mrs-select" value={item.unit} onChange={e => onChange({ ...item, unit: e.target.value })} disabled={units.length <= 1}>{units.map(u => <option key={u} value={u}>{u}</option>)}</select></div>
-      <div><select className="mrs-select" value={item.color} onChange={e => onChange({ ...item, color: e.target.value })} disabled={colors.length <= 1}>{colors.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+      <div><input className="mrs-input" value={item.unit} disabled /></div>
+      <div><select className="mrs-select" value={item.color} onChange={e => handleColorChange(e.target.value)} disabled={colors.length <= 1}>{colors.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
       <button className="mrs-btn mrs-btn-danger" onClick={onRemove} disabled={!removable} title="삭제" style={{ padding: 8 }}><Trash2 size={16} /></button>
     </div>
   );
@@ -338,12 +342,10 @@ function ItemRowEditor({ item, onChange, onRemove, removable }) {
 function LoginScreen({ onLogin, loading, error }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-
-  function handleSubmit() {
+  function submit() {
     if (!username.trim() || !password) { alert('아이디와 비밀번호를 입력해주세요.'); return; }
     onLogin(username.trim(), password);
   }
-
   return (
     <div className="mrs-root">
       <GlobalStyle />
@@ -354,22 +356,13 @@ function LoginScreen({ onLogin, loading, error }) {
             <span className="mrs-display" style={{ fontSize: 18, fontWeight: 600 }}>자재 요청 관리 시스템</span>
           </div>
           <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 24 }}>로그인 · 건국이엔아이 공무팀</div>
-
           <label className="mrs-field-label">아이디</label>
-          <input className="mrs-input" value={username} onChange={e => setUsername(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSubmit()} placeholder="아이디" style={{ marginBottom: 14 }} />
-
+          <input className="mrs-input" value={username} onChange={e => setUsername(e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()} placeholder="아이디" style={{ marginBottom: 14 }} />
           <label className="mrs-field-label">비밀번호</label>
-          <input className="mrs-input" type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSubmit()} placeholder="비밀번호" style={{ marginBottom: 14 }} />
-
-          {error && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#B84B10', fontSize: 12, marginBottom: 14 }}>
-              <AlertCircle size={14} /> {error}
-            </div>
-          )}
-
-          <button className="mrs-btn mrs-btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={handleSubmit} disabled={loading}>
-            {loading ? <Loader2 size={15} className="mrs-spin" /> : <Lock size={15} />}
-            로그인
+          <input className="mrs-input" type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()} placeholder="비밀번호" style={{ marginBottom: 14 }} />
+          {error && <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#B84B10', fontSize: 12, marginBottom: 14 }}><AlertCircle size={14} /> {error}</div>}
+          <button className="mrs-btn mrs-btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={submit} disabled={loading}>
+            {loading ? <Loader2 size={15} className="mrs-spin" /> : <Lock size={15} />} 로그인
           </button>
         </div>
       </div>
@@ -377,42 +370,36 @@ function LoginScreen({ onLogin, loading, error }) {
   );
 }
 
-// ── 팀장: 요청 입력 폼 ──────────────────────────────────
-function RequestForm({ session, projectName, onSubmit, saving }) {
-  const [floor, setFloor] = useState(FLOORS[0]);
-  const [rowFrom, setRowFrom] = useState('A');
-  const [rowTo, setRowTo] = useState('A');
-  const [colFrom, setColFrom] = useState('1');
-  const [colTo, setColTo] = useState('1');
+// ── 팀장: 자재요청 시트 ─────────────────────────────────
+function RequestForm({ session, projectName, catalog, zones, onSubmit, saving }) {
+  const [zoneName, setZoneName] = useState('');
   const [process, setProcess] = useState(PROCESSES[0]);
   const [note, setNote] = useState('');
-  const [items, setItems] = useState([newItemRow()]);
+  const [items, setItems] = useState([newItemRow(catalog)]);
   const [justSubmitted, setJustSubmitted] = useState(false);
 
+  useEffect(() => {
+    if (!zoneName && zones.length > 0) setZoneName(zones[0].name);
+  }, [zones]);
+
+  useEffect(() => { setItems([newItemRow(catalog)]); }, [catalog.length]);
+
   function updateItem(id, updated) { setItems(items.map(it => it.id === id ? updated : it)); }
-  function addItem() { setItems([...items, newItemRow()]); }
+  function addItem() { setItems([...items, newItemRow(catalog)]); }
   function removeItem(id) { if (items.length === 1) return; setItems(items.filter(it => it.id !== id)); }
 
-  function validate() {
-    const valid = items.filter(it => it.name && it.qty !== '' && Number(it.qty) > 0);
-    if (valid.length === 0) return '최소 1개 이상의 품목에 수량을 입력해주세요.';
-    return null;
-  }
-
   async function handleSubmit() {
-    const err = validate();
-    if (err) { alert(err); return; }
+    if (!zoneName) { alert('구역을 선택해주세요. 관리자에게 구역 등록을 요청하세요.'); return; }
+    if (catalog.length === 0) { alert('품목이 등록되어 있지 않습니다. 관리자에게 품목 등록을 요청하세요.'); return; }
+    const valid = items.filter(it => it.name && it.qty !== '' && Number(it.qty) > 0);
+    if (valid.length === 0) { alert('최소 1개 이상의 품목에 수량을 입력해주세요.'); return; }
     const payload = {
       id: genId(), reqNo: genReqNo(), requester: session.name, username: session.username,
-      projectId: session.projectId, zone: fmtZone(rowFrom, rowTo, colFrom, colTo),
-      floor, rowFrom, rowTo, colFrom, colTo, process,
-      note: note.trim(), createdAt: new Date().toISOString(),
-      items: items.filter(it => it.name && it.qty !== '' && Number(it.qty) > 0)
-        .map(it => ({ id: genId(), name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit, status: '요청됨' })),
+      projectId: session.projectId, zoneName, process, note: note.trim(), createdAt: new Date().toISOString(),
+      items: valid.map(it => ({ id: genId(), name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit, status: '요청됨' })),
     };
     await onSubmit(payload);
-    setFloor(FLOORS[0]); setRowFrom('A'); setRowTo('A'); setColFrom('1'); setColTo('1');
-    setProcess(PROCESSES[0]); setNote(''); setItems([newItemRow()]);
+    setNote(''); setItems([newItemRow(catalog)]);
     setJustSubmitted(true);
     setTimeout(() => setJustSubmitted(false), 3000);
   }
@@ -431,24 +418,37 @@ function RequestForm({ session, projectName, onSubmit, saving }) {
       </div>
 
       <div style={{ marginBottom: 14 }}>
-        <label className="mrs-field-label">구역 (층 / 행 / 열)</label>
-        <div className="mrs-zone-grid mrs-zone-grid-5">
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>층</span><select className="mrs-select" value={floor} onChange={e => setFloor(e.target.value)}>{FLOORS.map(f => <option key={f} value={f}>{f}</option>)}</select></div>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>행 시작</span><select className="mrs-select" value={rowFrom} onChange={e => setRowFrom(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>행 끝</span><select className="mrs-select" value={rowTo} onChange={e => setRowTo(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>열 시작</span><select className="mrs-select" value={colFrom} onChange={e => setColFrom(e.target.value)}>{COLS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>열 끝</span><select className="mrs-select" value={colTo} onChange={e => setColTo(e.target.value)}>{COLS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-        </div>
+        <label className="mrs-field-label">구역</label>
+        {zones.length === 0 ? (
+          <div style={{ padding: 10, background: '#FBE7DA', color: '#B84B10', fontSize: 13, borderRadius: 3 }}>
+            등록된 구역이 없습니다. 관리자에게 구역 등록을 요청하세요.
+          </div>
+        ) : (
+          <select className="mrs-select" value={zoneName} onChange={e => setZoneName(e.target.value)}>
+            {zones.map(z => <option key={z.id} value={z.name}>{z.name}</option>)}
+          </select>
+        )}
       </div>
 
       <div style={{ marginBottom: 8 }}><label className="mrs-field-label">요청 품목</label></div>
-      <div className="mrs-item-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
-        <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목</span><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
-        <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>수량</span><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>단위</span>
-        <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span><span></span>
-      </div>
-      {items.map(it => <ItemRowEditor key={it.id} item={it} onChange={u => updateItem(it.id, u)} onRemove={() => removeItem(it.id)} removable={items.length > 1} />)}
-      <button className="mrs-btn mrs-btn-ghost" style={{ marginTop: 10 }} onClick={addItem}><Plus size={15} /> 품목 추가</button>
+      {catalog.length === 0 ? (
+        <div style={{ padding: 10, background: '#FBE7DA', color: '#B84B10', fontSize: 13, borderRadius: 3, marginBottom: 10 }}>
+          등록된 품목이 없습니다. 관리자에게 품목 등록을 요청하세요.
+        </div>
+      ) : (
+        <>
+          <div className="mrs-item-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>수량</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>단위</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span>
+            <span></span>
+          </div>
+          {items.map(it => <ItemRowEditor key={it.id} item={it} catalog={catalog} onChange={u => updateItem(it.id, u)} onRemove={() => removeItem(it.id)} removable={items.length > 1} />)}
+          <button className="mrs-btn mrs-btn-ghost" style={{ marginTop: 10 }} onClick={addItem}><Plus size={15} /> 품목 추가</button>
+        </>
+      )}
 
       <div style={{ marginTop: 18 }}>
         <label className="mrs-field-label">특이사항 (선택)</label>
@@ -465,8 +465,8 @@ function RequestForm({ session, projectName, onSubmit, saving }) {
   );
 }
 
-// ── 팀장: 본인 요청 리스트 ──────────────────────────────
-function MyRequestList({ requests, session, projects, onConfirmReceipt, saving }) {
+// ── 팀장: 요청리스트 (본인 요청 조회 + 삭제 + 입고확인 + PDF) ──
+function MyRequestList({ requests, session, projects, onConfirmReceipt, onDelete, saving }) {
   const [confirmingReqId, setConfirmingReqId] = useState(null);
   const projectNameById = {};
   projects.forEach(p => { projectNameById[p.id] = p.name; });
@@ -476,8 +476,9 @@ function MyRequestList({ requests, session, projects, onConfirmReceipt, saving }
     .slice()
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-  function allConfirmed(r) { return r.items.every(it => it.status === '확인됨' || it.status === '입고완료'); }
-  function isDelivered(r) { return r.items.every(it => it.status === '입고완료'); }
+  function allRequested(r) { return r.items.every(it => it.status === '요청됨'); }
+  function allConfirmedOrDelivered(r) { return r.items.every(it => it.status === '확인됨' || it.status === '입고완료'); }
+  function allDelivered(r) { return r.items.every(it => it.status === '입고완료'); }
 
   async function handleConfirm(r, sig) {
     await onConfirmReceipt(r.id, sig);
@@ -487,7 +488,7 @@ function MyRequestList({ requests, session, projects, onConfirmReceipt, saving }
   function downloadPdf(r) {
     generateDocPdf({
       title: '거래명세표', docNo: r.reqNo, dateStr: fmtDate(r.confirmedAt || r.createdAt),
-      projectName: projectNameById[r.projectId], zoneStr: `${r.floor || ''} ${r.zone}`,
+      projectName: projectNameById[r.projectId], zoneStr: r.zoneName,
       items: r.items, deliverLabel: '인도자 (자재팀)', deliverName: r.deliverName, deliverSignature: r.deliverSignature,
       receiveLabel: '인수자 (현장팀장)', receiveName: r.receiveName, receiveSignature: r.receiveSignature,
     });
@@ -504,7 +505,7 @@ function MyRequestList({ requests, session, projects, onConfirmReceipt, saving }
             <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{r.reqNo}</span>
             <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{fmtDate(r.createdAt)}</span>
           </div>
-          <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 10 }}>{r.floor} {r.zone}</div>
+          <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 10 }}>{r.zoneName} · {r.process}</div>
           {r.items.map(it => (
             <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px dashed var(--paper-line)' }}>
               <span style={{ fontSize: 13 }}><b>{it.name}</b> {it.spec}{it.color && it.color !== 'N/A' ? ` ${it.color}` : ''} · {it.qty}{it.unit}</span>
@@ -512,11 +513,18 @@ function MyRequestList({ requests, session, projects, onConfirmReceipt, saving }
             </div>
           ))}
 
-          {isDelivered(r) ? (
-            <button className="mrs-btn mrs-btn-ghost" style={{ marginTop: 12 }} onClick={() => downloadPdf(r)}><Download size={15} /> 거래명세표 다운로드</button>
-          ) : allConfirmed(r) && confirmingReqId !== r.id ? (
-            <button className="mrs-btn mrs-btn-primary" style={{ marginTop: 12 }} onClick={() => setConfirmingReqId(r.id)}><PenLine size={15} /> 입고확인</button>
-          ) : null}
+          <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+            {allRequested(r) && (
+              <button className="mrs-btn mrs-btn-danger" style={{ borderColor: '#F0A97A' }} onClick={() => { if (confirm('이 요청을 삭제할까요?')) onDelete(r.id); }}>
+                <Trash2 size={15} /> 요청 삭제
+              </button>
+            )}
+            {allDelivered(r) ? (
+              <button className="mrs-btn mrs-btn-ghost" onClick={() => downloadPdf(r)}><Download size={15} /> 거래명세표 다운로드</button>
+            ) : allConfirmedOrDelivered(r) && confirmingReqId !== r.id ? (
+              <button className="mrs-btn mrs-btn-primary" onClick={() => setConfirmingReqId(r.id)}><PenLine size={15} /> 입고확인</button>
+            ) : null}
+          </div>
 
           {confirmingReqId === r.id && (
             <ConfirmSignaturePanel
@@ -533,51 +541,32 @@ function MyRequestList({ requests, session, projects, onConfirmReceipt, saving }
   );
 }
 
-// ── 팀장 전체 화면 ──────────────────────────────────────
-function LeaderApp({ session, requests, returns, projects, onSubmit, onSubmitReturn, onConfirmReceipt, saving }) {
-  const [tab, setTab] = useState('form');
-  const projectName = (projects.find(p => p.id === session.projectId) || {}).name || '(알 수 없음)';
-  return (
-    <div className="mrs-body">
-      <div className="mrs-tabs" style={{ margin: '-20px -20px 20px', padding: '0 20px' }}>
-        <button className={`mrs-tab ${tab === 'form' ? 'active' : ''}`} onClick={() => setTab('form')}><ClipboardList size={16} /> 자재요청 시트</button>
-        <button className={`mrs-tab ${tab === 'mylist' ? 'active' : ''}`} onClick={() => setTab('mylist')}><ListChecks size={16} /> 요청리스트</button>
-        <button className={`mrs-tab ${tab === 'return' ? 'active' : ''}`} onClick={() => setTab('return')}><PackageMinus size={16} /> 물량반출</button>
-      </div>
-      {tab === 'form' && <RequestForm session={session} projectName={projectName} onSubmit={onSubmit} saving={saving} />}
-      {tab === 'mylist' && <MyRequestList requests={requests} session={session} projects={projects} onConfirmReceipt={onConfirmReceipt} saving={saving} />}
-      {tab === 'return' && <ReturnPanel session={session} projectName={projectName} returns={returns} onSubmit={onSubmitReturn} saving={saving} />}
-    </div>
-  );
-}
-
-// ── 팀장: 물량반출 입력 + 본인 반출내역 ─────────────────
-function ReturnPanel({ session, projectName, returns, onSubmit, saving }) {
-  const [floor, setFloor] = useState(FLOORS[0]);
-  const [rowFrom, setRowFrom] = useState('A');
-  const [rowTo, setRowTo] = useState('A');
-  const [colFrom, setColFrom] = useState('1');
-  const [colTo, setColTo] = useState('1');
+// ── 팀장: 물량반출 ──────────────────────────────────────
+function ReturnPanel({ session, projectName, catalog, zones, returns, onSubmit, saving }) {
+  const [zoneName, setZoneName] = useState('');
   const [reason, setReason] = useState('');
-  const [items, setItems] = useState([newItemRow()]);
+  const [items, setItems] = useState([newItemRow(catalog)]);
   const [justSubmitted, setJustSubmitted] = useState(false);
 
+  useEffect(() => { if (!zoneName && zones.length > 0) setZoneName(zones[0].name); }, [zones]);
+  useEffect(() => { setItems([newItemRow(catalog)]); }, [catalog.length]);
+
   function updateItem(id, updated) { setItems(items.map(it => it.id === id ? updated : it)); }
-  function addItem() { setItems([...items, newItemRow()]); }
+  function addItem() { setItems([...items, newItemRow(catalog)]); }
   function removeItem(id) { if (items.length === 1) return; setItems(items.filter(it => it.id !== id)); }
 
   async function handleSubmit() {
+    if (!zoneName) { alert('구역을 선택해주세요.'); return; }
+    if (catalog.length === 0) { alert('품목이 등록되어 있지 않습니다.'); return; }
     const valid = items.filter(it => it.name && it.qty !== '' && Number(it.qty) > 0);
     if (valid.length === 0) { alert('최소 1개 이상의 품목에 수량을 입력해주세요.'); return; }
     const payload = {
       id: genId(), reqNo: genReqNo(), requester: session.name, username: session.username,
-      projectId: session.projectId, floor, zone: fmtZone(rowFrom, rowTo, colFrom, colTo),
-      rowFrom, rowTo, colFrom, colTo, reason: reason.trim(), createdAt: new Date().toISOString(),
+      projectId: session.projectId, zoneName, reason: reason.trim(), createdAt: new Date().toISOString(),
       items: valid.map(it => ({ id: genId(), name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit })),
     };
     await onSubmit(payload);
-    setFloor(FLOORS[0]); setRowFrom('A'); setRowTo('A'); setColFrom('1'); setColTo('1');
-    setReason(''); setItems([newItemRow()]);
+    setReason(''); setItems([newItemRow(catalog)]);
     setJustSubmitted(true);
     setTimeout(() => setJustSubmitted(false), 3000);
   }
@@ -589,7 +578,7 @@ function ReturnPanel({ session, projectName, returns, onSubmit, saving }) {
   function downloadPdf(r) {
     generateDocPdf({
       title: '반출확인서', docNo: r.reqNo, dateStr: fmtDate(r.confirmedAt || r.createdAt),
-      projectName, zoneStr: `${r.floor || ''} ${r.zone}`,
+      projectName, zoneStr: r.zoneName,
       items: r.items, deliverLabel: '인도자 (현장팀장)', deliverName: r.deliverName, deliverSignature: r.deliverSignature,
       receiveLabel: '인수자 (자재팀)', receiveName: r.receiveName, receiveSignature: r.receiveSignature,
     });
@@ -603,23 +592,36 @@ function ReturnPanel({ session, projectName, returns, onSubmit, saving }) {
           <span className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>RETURN REQUEST</span>
         </div>
 
-        <label className="mrs-field-label">구역 (층 / 행 / 열)</label>
-        <div className="mrs-zone-grid mrs-zone-grid-5" style={{ marginBottom: 14 }}>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>층</span><select className="mrs-select" value={floor} onChange={e => setFloor(e.target.value)}>{FLOORS.map(f => <option key={f} value={f}>{f}</option>)}</select></div>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>행 시작</span><select className="mrs-select" value={rowFrom} onChange={e => setRowFrom(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>행 끝</span><select className="mrs-select" value={rowTo} onChange={e => setRowTo(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>열 시작</span><select className="mrs-select" value={colFrom} onChange={e => setColFrom(e.target.value)}>{COLS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>열 끝</span><select className="mrs-select" value={colTo} onChange={e => setColTo(e.target.value)}>{COLS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-        </div>
+        <label className="mrs-field-label">구역</label>
+        {zones.length === 0 ? (
+          <div style={{ padding: 10, background: '#FBE7DA', color: '#B84B10', fontSize: 13, borderRadius: 3, marginBottom: 14 }}>
+            등록된 구역이 없습니다. 관리자에게 구역 등록을 요청하세요.
+          </div>
+        ) : (
+          <select className="mrs-select" value={zoneName} onChange={e => setZoneName(e.target.value)} style={{ marginBottom: 14 }}>
+            {zones.map(z => <option key={z.id} value={z.name}>{z.name}</option>)}
+          </select>
+        )}
 
         <div style={{ marginBottom: 8 }}><label className="mrs-field-label">반출 품목</label></div>
-        <div className="mrs-item-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
-          <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목</span><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
-          <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>수량</span><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>단위</span>
-          <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span><span></span>
-        </div>
-        {items.map(it => <ItemRowEditor key={it.id} item={it} onChange={u => updateItem(it.id, u)} onRemove={() => removeItem(it.id)} removable={items.length > 1} />)}
-        <button className="mrs-btn mrs-btn-ghost" style={{ marginTop: 10 }} onClick={addItem}><Plus size={15} /> 품목 추가</button>
+        {catalog.length === 0 ? (
+          <div style={{ padding: 10, background: '#FBE7DA', color: '#B84B10', fontSize: 13, borderRadius: 3, marginBottom: 10 }}>
+            등록된 품목이 없습니다.
+          </div>
+        ) : (
+          <>
+            <div className="mrs-item-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>수량</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>단위</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span>
+              <span></span>
+            </div>
+            {items.map(it => <ItemRowEditor key={it.id} item={it} catalog={catalog} onChange={u => updateItem(it.id, u)} onRemove={() => removeItem(it.id)} removable={items.length > 1} />)}
+            <button className="mrs-btn mrs-btn-ghost" style={{ marginTop: 10 }} onClick={addItem}><Plus size={15} /> 품목 추가</button>
+          </>
+        )}
 
         <div style={{ marginTop: 18 }}>
           <label className="mrs-field-label">반출 사유 (선택)</label>
@@ -643,7 +645,7 @@ function ReturnPanel({ session, projectName, returns, onSubmit, saving }) {
             <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{r.reqNo}</span>
             <StatusBadge value={r.status} />
           </div>
-          <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>{r.floor} {r.zone}</div>
+          <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>{r.zoneName}</div>
           {r.items.map(it => (
             <div key={it.id} style={{ fontSize: 13, padding: '3px 0' }}>{it.name} {it.spec} · {it.qty}{it.unit}</div>
           ))}
@@ -655,40 +657,26 @@ function ReturnPanel({ session, projectName, returns, onSubmit, saving }) {
     </div>
   );
 }
-function ConfirmSignaturePanel({ deliverLabel, receiveLabel, deliverNameDefault, receiveNameDefault, onCancel, onSubmit, saving }) {
-  const [deliverName, setDeliverName] = useState(deliverNameDefault || '');
-  const [receiveName, setReceiveName] = useState(receiveNameDefault || '');
-  const [deliverSig, setDeliverSig] = useState('');
-  const [receiveSig, setReceiveSig] = useState('');
 
-  function submit() {
-    if (!deliverName.trim() || !receiveName.trim()) { alert('인도자, 인수자 이름을 모두 입력해주세요.'); return; }
-    if (!deliverSig || !receiveSig) { alert('양쪽 서명을 모두 받아주세요.'); return; }
-    onSubmit({ deliverName: deliverName.trim(), deliverSignature: deliverSig, receiveName: receiveName.trim(), receiveSignature: receiveSig });
-  }
-
+function LeaderApp({ session, requests, returns, projects, catalog, zones, onSubmit, onSubmitReturn, onConfirmReceipt, onDeleteRequest, saving }) {
+  const [tab, setTab] = useState('form');
+  const projectName = (projects.find(p => p.id === session.projectId) || {}).name || '(알 수 없음)';
   return (
-    <div className="mrs-card" style={{ padding: 16, marginTop: 10, background: '#F1EFE9' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-        <div>
-          <label className="mrs-field-label">{deliverLabel}</label>
-          <input className="mrs-input" value={deliverName} onChange={e => setDeliverName(e.target.value)} placeholder="이름" style={{ marginBottom: 8 }} />
-          <SignaturePad onChange={setDeliverSig} />
-        </div>
-        <div>
-          <label className="mrs-field-label">{receiveLabel}</label>
-          <input className="mrs-input" value={receiveName} onChange={e => setReceiveName(e.target.value)} placeholder="이름" style={{ marginBottom: 8 }} />
-          <SignaturePad onChange={setReceiveSig} />
-        </div>
+    <div className="mrs-body">
+      <div className="mrs-tabs" style={{ margin: '-20px -20px 20px', padding: '0 20px' }}>
+        <button className={`mrs-tab ${tab === 'form' ? 'active' : ''}`} onClick={() => setTab('form')}><ClipboardList size={16} /> 자재요청 시트</button>
+        <button className={`mrs-tab ${tab === 'mylist' ? 'active' : ''}`} onClick={() => setTab('mylist')}><ListChecks size={16} /> 요청리스트</button>
+        <button className={`mrs-tab ${tab === 'return' ? 'active' : ''}`} onClick={() => setTab('return')}><PackageMinus size={16} /> 물량반출</button>
       </div>
-      <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-        <button className="mrs-btn mrs-btn-primary" onClick={submit} disabled={saving}><PenLine size={15} /> 서명 완료 및 확인</button>
-        <button className="mrs-btn mrs-btn-ghost" onClick={onCancel}>취소</button>
-      </div>
+      {tab === 'form' && <RequestForm session={session} projectName={projectName} catalog={catalog} zones={zones} onSubmit={onSubmit} saving={saving} />}
+      {tab === 'mylist' && <MyRequestList requests={requests} session={session} projects={projects} onConfirmReceipt={onConfirmReceipt} onDelete={onDeleteRequest} saving={saving} />}
+      {tab === 'return' && <ReturnPanel session={session} projectName={projectName} catalog={catalog} zones={zones} returns={returns} onSubmit={onSubmitReturn} saving={saving} />}
     </div>
   );
 }
-function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope }) {
+
+// ── 누계요청리스트 (관리자/자재팀 공용) ─────────────────────
+function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, allowPdf }) {
   const [projectFilter, setProjectFilter] = useState('전체');
   const [zoneQuery, setZoneQuery] = useState('');
   const [processFilter, setProcessFilter] = useState('전체');
@@ -704,10 +692,11 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope }) 
     if (scope === 'today' && !isToday(r.createdAt)) return;
     r.items.forEach(it => {
       rows.push({
-        reqId: r.id, itemId: it.id, reqNo: r.reqNo, requester: r.requester,
+        req: r, reqId: r.id, itemId: it.id, reqNo: r.reqNo, requester: r.requester,
         projectId: r.projectId, projectName: projectNameById[r.projectId] || '(삭제된 프로젝트)',
-        zone: r.zone, process: r.process, name: it.name, spec: it.spec, color: it.color,
-        qty: it.qty, unit: it.unit, status: it.status, note: r.note, createdAt: r.createdAt,
+        zoneName: r.zoneName || '', process: r.process,
+        name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit,
+        status: it.status, note: r.note, createdAt: r.createdAt,
       });
     });
   });
@@ -715,7 +704,7 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope }) 
   const statuses = ['전체', ...STATUS_FLOW];
   const filtered = rows.filter(r =>
     (projectFilter === '전체' || r.projectId === projectFilter) &&
-    (zoneQuery.trim() === '' || r.zone.includes(zoneQuery.trim())) &&
+    (zoneQuery.trim() === '' || (r.zoneName || '').includes(zoneQuery.trim())) &&
     (processFilter === '전체' || r.process === processFilter) &&
     (statusFilter === '전체' || r.status === statusFilter) &&
     (dateFrom === '' || new Date(r.createdAt) >= new Date(dateFrom + 'T00:00:00')) &&
@@ -728,7 +717,7 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope }) 
   function exportExcel() {
     const data = filtered.map(r => ({
       '프로젝트': r.projectName, '요청번호': r.reqNo, '요청일시': fmtDate(r.createdAt), '요청자': r.requester,
-      '구역': r.zone, '공정': r.process, '품목명': r.name, '규격': r.spec, '색상': r.color,
+      '구역': r.zoneName, '공정': r.process, '품목명': r.name, '규격': r.spec, '색상': r.color,
       '수량': r.qty, '단위': r.unit, '상태': r.status, '특이사항': r.note || '',
     }));
     const ws = XLSX.utils.json_to_sheet(data);
@@ -738,6 +727,15 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope }) 
     const d = new Date();
     const label = (scope === 'today' ? '금일_' : '누계_') + (projectFilter === '전체' ? '전체프로젝트' : (projectNameById[projectFilter] || '프로젝트'));
     XLSX.writeFile(wb, `${label}_자재요청_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}.xlsx`);
+  }
+
+  function downloadPdf(req) {
+    generateDocPdf({
+      title: '거래명세표', docNo: req.reqNo, dateStr: fmtDate(req.confirmedAt || req.createdAt),
+      projectName: projectNameById[req.projectId], zoneStr: req.zoneName,
+      items: req.items, deliverLabel: '인도자 (자재팀)', deliverName: req.deliverName, deliverSignature: req.deliverSignature,
+      receiveLabel: '인수자 (현장팀장)', receiveName: req.receiveName, receiveSignature: req.receiveSignature,
+    });
   }
 
   return (
@@ -757,7 +755,7 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope }) 
       </div>
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14, alignItems: 'center' }}>
-        <input className="mrs-input" style={{ width: 160 }} value={zoneQuery} onChange={e => setZoneQuery(e.target.value)} placeholder="구역 검색 (예: A행)" />
+        <input className="mrs-input" style={{ width: 160 }} value={zoneQuery} onChange={e => setZoneQuery(e.target.value)} placeholder="구역명 검색" />
         {scope === 'all' && (
           <>
             <input className="mrs-input" type="date" style={{ width: 145 }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
@@ -780,19 +778,28 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope }) 
       ) : (
         <div className="mrs-table-wrap">
           <table className="mrs-table">
-            <thead><tr><th>프로젝트</th><th>요청번호</th><th>요청일시</th><th>요청자</th><th>구역</th><th>공정</th><th>품목명</th><th>규격</th><th>색상</th><th>수량</th><th>상태</th><th></th></tr></thead>
+            <thead><tr><th>프로젝트</th><th>요청번호</th><th>요청일시</th><th>요청자</th><th>구역</th><th>공정</th><th>품목명</th><th>규격</th><th>색상</th><th>수량</th><th>상태</th><th></th><th></th></tr></thead>
             <tbody>
               {filtered.map(r => (
                 <tr key={r.itemId}>
                   <td style={{ fontWeight: 600 }}>{r.projectName}</td>
                   <td className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{r.reqNo}</td>
                   <td className="mrs-mono" style={{ fontSize: 12 }}>{fmtDate(r.createdAt)}</td>
-                  <td>{r.requester}</td><td>{r.zone}</td><td>{r.process}</td>
+                  <td>{r.requester}</td><td>{r.zoneName}</td><td>{r.process}</td>
                   <td style={{ fontWeight: 600 }}>{r.name}</td><td style={{ color: 'var(--ink-soft)' }}>{r.spec || '-'}</td>
                   <td style={{ color: 'var(--ink-soft)' }}>{r.color || '-'}</td>
                   <td className="mrs-mono">{r.qty} {r.unit}</td>
-                  <td><StatusSelect value={r.status} onChange={v => onUpdateStatus(r.reqId, r.itemId, v)} /></td>
-                  <td><button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: '#B84B10' }} onClick={() => { if (confirm('이 요청 전체를 삭제할까요?')) onDelete(r.reqId); }} title="요청 삭제"><X size={15} /></button></td>
+                  <td><StatusSelect value={r.status} options={STATUS_FLOW} onChange={v => onUpdateStatus(r.reqId, r.itemId, v)} /></td>
+                  <td>
+                    {allowPdf && r.status === '입고완료' && (
+                      <button className="mrs-btn mrs-btn-ghost" style={{ padding: '4px 8px', fontSize: 12 }} onClick={() => downloadPdf(r.req)} title="거래명세표"><Download size={13} /></button>
+                    )}
+                  </td>
+                  <td>
+                    {onDelete && (
+                      <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: '#B84B10' }} onClick={() => { if (confirm('이 요청 전체를 삭제할까요?')) onDelete(r.reqId); }} title="요청 삭제"><X size={15} /></button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -803,24 +810,196 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope }) 
   );
 }
 
-// ── 관리자: 프로젝트명 관리 ─────────────────────────────
-function ProjectManager({ projects, onSave, saving }) {
-  const [draft, setDraft] = useState(projects);
-  useEffect(() => setDraft(projects), [projects]);
+// ── 누계반출리스트 (관리자/자재팀 공용) ─────────────────────
+function ReturnsTable({ returns, projects }) {
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [statusFilter, setStatusFilter] = useState('전체');
+  const projectNameById = {};
+  projects.forEach(p => { projectNameById[p.id] = p.name; });
+
+  const rows = [];
+  returns.forEach(r => {
+    r.items.forEach(it => {
+      rows.push({
+        ret: r, reqId: r.id, reqNo: r.reqNo, requester: r.requester,
+        projectName: projectNameById[r.projectId] || '-',
+        zoneName: r.zoneName || '', name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit,
+        status: r.status, reason: r.reason, createdAt: r.createdAt,
+      });
+    });
+  });
+
+  const filtered = rows.filter(r =>
+    (statusFilter === '전체' || r.status === statusFilter) &&
+    (dateFrom === '' || new Date(r.createdAt) >= new Date(dateFrom + 'T00:00:00')) &&
+    (dateTo === '' || new Date(r.createdAt) <= new Date(dateTo + 'T23:59:59'))
+  ).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  function exportExcel() {
+    const data = filtered.map(r => ({
+      '프로젝트': r.projectName, '반출번호': r.reqNo, '반출일시': fmtDate(r.createdAt), '요청자': r.requester,
+      '구역': r.zoneName, '품목명': r.name, '규격': r.spec, '색상': r.color,
+      '수량': r.qty, '단위': r.unit, '상태': r.status, '사유': r.reason || '',
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws['!cols'] = [{wch:16},{wch:18},{wch:16},{wch:12},{wch:14},{wch:16},{wch:12},{wch:8},{wch:8},{wch:8},{wch:12},{wch:30}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '물량반출');
+    const d = new Date();
+    XLSX.writeFile(wb, `누계반출리스트_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}.xlsx`);
+  }
+
+  function downloadPdf(r) {
+    generateDocPdf({
+      title: '반출확인서', docNo: r.reqNo, dateStr: fmtDate(r.confirmedAt || r.createdAt),
+      projectName: projectNameById[r.projectId], zoneStr: r.zoneName,
+      items: r.items, deliverLabel: '인도자 (현장팀장)', deliverName: r.deliverName, deliverSignature: r.deliverSignature,
+      receiveLabel: '인수자 (자재팀)', receiveName: r.receiveName, receiveSignature: r.receiveSignature,
+    });
+  }
+
   return (
-    <div className="mrs-card" style={{ padding: 18, marginBottom: 20 }}>
-      <h3 className="mrs-display" style={{ fontSize: 15, margin: '0 0 12px', fontWeight: 600 }}>프로젝트명 관리</h3>
-      {draft.map((p, idx) => (
-        <div key={p.id} style={{ display: 'flex', gap: 10, marginBottom: 8, alignItems: 'center' }}>
-          <input className="mrs-input" value={p.name} onChange={e => { const next = [...draft]; next[idx] = { ...p, name: e.target.value }; setDraft(next); }} />
+    <div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14, alignItems: 'center' }}>
+        <input className="mrs-input" type="date" style={{ width: 145 }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+        <span style={{ fontSize: 12, color: 'var(--ink-soft)' }}>~</span>
+        <input className="mrs-input" type="date" style={{ width: 145 }} value={dateTo} onChange={e => setDateTo(e.target.value)} />
+        <select className="mrs-select" style={{ width: 'auto' }} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+          <option value="전체">전체 상태</option>
+          {RETURN_STATUS_FLOW.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <div style={{ flex: 1 }} />
+        <button className="mrs-btn mrs-btn-primary" onClick={exportExcel} disabled={filtered.length === 0}><Download size={15} /> 엑셀로 내보내기</button>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="mrs-card mrs-empty">표시할 반출요청이 없습니다.</div>
+      ) : (
+        <div className="mrs-table-wrap">
+          <table className="mrs-table">
+            <thead><tr><th>프로젝트</th><th>반출번호</th><th>반출일시</th><th>요청자</th><th>구역</th><th>품목명</th><th>규격</th><th>색상</th><th>수량</th><th>상태</th><th></th></tr></thead>
+            <tbody>
+              {filtered.map((r, i) => (
+                <tr key={i}>
+                  <td style={{ fontWeight: 600 }}>{r.projectName}</td>
+                  <td className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{r.reqNo}</td>
+                  <td className="mrs-mono" style={{ fontSize: 12 }}>{fmtDate(r.createdAt)}</td>
+                  <td>{r.requester}</td><td>{r.zoneName}</td>
+                  <td style={{ fontWeight: 600 }}>{r.name}</td><td style={{ color: 'var(--ink-soft)' }}>{r.spec || '-'}</td>
+                  <td style={{ color: 'var(--ink-soft)' }}>{r.color || '-'}</td>
+                  <td className="mrs-mono">{r.qty} {r.unit}</td>
+                  <td><StatusBadge value={r.status} /></td>
+                  <td>
+                    {r.status === '반출확인완료' && (
+                      <button className="mrs-btn mrs-btn-ghost" style={{ padding: '4px 8px', fontSize: 12 }} onClick={() => downloadPdf(r.ret)} title="반출확인서"><Download size={13} /></button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      ))}
-      <button className="mrs-btn mrs-btn-primary" disabled={saving || draft.some(p => !p.name.trim())} onClick={() => onSave(draft)}><Save size={15} /> 저장</button>
+      )}
     </div>
   );
 }
 
-// ── 관리자: 팀장 계정 관리 ──────────────────────────────
+// ── 관리 설정: 프로젝트 ────────────────────────────────
+function ProjectManager({ projects, onSave, saving }) {
+  const [draft, setDraft] = useState(projects);
+  useEffect(() => setDraft(projects), [projects]);
+  function addRow() { setDraft([...draft, { id: genId('proj'), name: '' }]); }
+  function remove(idx) { setDraft(draft.filter((_, i) => i !== idx)); }
+  return (
+    <div className="mrs-card" style={{ padding: 18, marginBottom: 20 }}>
+      <h3 className="mrs-display" style={{ fontSize: 15, margin: '0 0 12px', fontWeight: 600 }}>프로젝트 관리</h3>
+      {draft.map((p, idx) => (
+        <div key={p.id} style={{ display: 'flex', gap: 10, marginBottom: 8, alignItems: 'center' }}>
+          <input className="mrs-input" value={p.name} onChange={e => { const next = [...draft]; next[idx] = { ...p, name: e.target.value }; setDraft(next); }} />
+          <button className="mrs-btn mrs-btn-danger" onClick={() => remove(idx)} style={{ padding: 8 }}><Trash2 size={15} /></button>
+        </div>
+      ))}
+      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+        <button className="mrs-btn mrs-btn-ghost" onClick={addRow}><Plus size={15} /> 프로젝트 추가</button>
+        <button className="mrs-btn mrs-btn-primary" disabled={saving || draft.some(p => !p.name.trim())} onClick={() => onSave(draft)}><Save size={15} /> 저장</button>
+      </div>
+    </div>
+  );
+}
+
+// ── 관리 설정: 구역명 ────────────────────────────────
+function ZoneManager({ zones, onSave, saving }) {
+  const [draft, setDraft] = useState(zones);
+  useEffect(() => setDraft(zones), [zones]);
+  function addRow() { setDraft([...draft, { id: genId('zone'), name: '' }]); }
+  function remove(idx) { setDraft(draft.filter((_, i) => i !== idx)); }
+  return (
+    <div className="mrs-card" style={{ padding: 18, marginBottom: 20 }}>
+      <h3 className="mrs-display" style={{ fontSize: 15, margin: '0 0 12px', fontWeight: 600 }}><MapPin size={15} style={{ verticalAlign: -2 }} /> 구역명 관리</h3>
+      <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 10 }}>팀장이 자재요청/물량반출 시 선택할 구역 목록입니다.</div>
+      {draft.length === 0 ? (
+        <div style={{ fontSize: 13, color: 'var(--ink-soft)', padding: '10px 0' }}>등록된 구역이 없습니다.</div>
+      ) : draft.map((z, idx) => (
+        <div key={z.id} style={{ display: 'flex', gap: 10, marginBottom: 8, alignItems: 'center' }}>
+          <input className="mrs-input" value={z.name} onChange={e => { const next = [...draft]; next[idx] = { ...z, name: e.target.value }; setDraft(next); }} placeholder="예: A블록 1존" />
+          <button className="mrs-btn mrs-btn-danger" onClick={() => remove(idx)} style={{ padding: 8 }}><Trash2 size={15} /></button>
+        </div>
+      ))}
+      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+        <button className="mrs-btn mrs-btn-ghost" onClick={addRow}><Plus size={15} /> 구역 추가</button>
+        <button className="mrs-btn mrs-btn-primary" disabled={saving || draft.some(z => !z.name.trim())} onClick={() => onSave(draft)}><Save size={15} /> 저장</button>
+      </div>
+    </div>
+  );
+}
+
+// ── 관리 설정: 품목/규격/색상/단위 ────────────────────────
+function CatalogManager({ catalog, onSave, saving }) {
+  const [draft, setDraft] = useState(catalog);
+  useEffect(() => setDraft(catalog), [catalog]);
+  function addRow() { setDraft([...draft, { id: genId('cat'), name: '', spec: '', color: 'N/A', unit: 'EA' }]); }
+  function remove(idx) { setDraft(draft.filter((_, i) => i !== idx)); }
+  function update(idx, field, val) { const next = [...draft]; next[idx] = { ...next[idx], [field]: val }; setDraft(next); }
+
+  return (
+    <div className="mrs-card" style={{ padding: 18, marginBottom: 20 }}>
+      <h3 className="mrs-display" style={{ fontSize: 15, margin: '0 0 12px', fontWeight: 600 }}><Package size={15} style={{ verticalAlign: -2 }} /> 품목 관리</h3>
+      <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 10 }}>팀장이 요청 시 선택할 품목/규격/색상/단위입니다. 색상이 없는 품목은 N/A로 두세요.</div>
+
+      {draft.length === 0 ? (
+        <div style={{ fontSize: 13, color: 'var(--ink-soft)', padding: '10px 0' }}>등록된 품목이 없습니다.</div>
+      ) : (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 0.8fr 0.8fr auto', gap: 6, marginBottom: 4 }}>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목명</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>단위</span>
+            <span></span>
+          </div>
+          {draft.map((it, idx) => (
+            <div key={it.id} style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 0.8fr 0.8fr auto', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+              <input className="mrs-input" value={it.name} onChange={e => update(idx, 'name', e.target.value)} placeholder="무나사전선관" />
+              <input className="mrs-input" value={it.spec} onChange={e => update(idx, 'spec', e.target.value)} placeholder="E19" />
+              <input className="mrs-input" value={it.color} onChange={e => update(idx, 'color', e.target.value)} placeholder="N/A" />
+              <select className="mrs-select" value={it.unit} onChange={e => update(idx, 'unit', e.target.value)}>
+                {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
+              <button className="mrs-btn mrs-btn-danger" onClick={() => remove(idx)} style={{ padding: 8 }}><Trash2 size={15} /></button>
+            </div>
+          ))}
+        </>
+      )}
+      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+        <button className="mrs-btn mrs-btn-ghost" onClick={addRow}><Plus size={15} /> 품목 추가</button>
+        <button className="mrs-btn mrs-btn-primary" disabled={saving || draft.some(it => !it.name.trim() || !it.spec.trim())} onClick={() => onSave(draft)}><Save size={15} /> 저장</button>
+      </div>
+    </div>
+  );
+}
+
+// ── 관리 설정: 팀장/자재팀 계정 ─────────────────────────
 function StaffManager({ users, projects, onAdd, onUpdate, onDelete, saving }) {
   const staff = users.filter(u => u.role === 'leader' || u.role === 'material');
   const [editingId, setEditingId] = useState(null);
@@ -833,11 +1012,8 @@ function StaffManager({ users, projects, onAdd, onUpdate, onDelete, saving }) {
 
   function startEdit(u) { setEditingId(u.id); setEditDraft({ name: u.name, username: u.username, password: '', role: u.role, projectId: u.projectId }); }
   function saveEdit(id) { onUpdate({ id, ...editDraft, projectId: editDraft.role === 'leader' ? editDraft.projectId : '' }); setEditingId(null); }
-
   function submitNew() {
-    if (!newStaff.name.trim() || !newStaff.username.trim() || !newStaff.password) {
-      alert('이름, 아이디, 비밀번호를 모두 입력해주세요.'); return;
-    }
+    if (!newStaff.name.trim() || !newStaff.username.trim() || !newStaff.password) { alert('이름, 아이디, 비밀번호를 모두 입력해주세요.'); return; }
     onAdd({ ...newStaff, projectId: newStaff.role === 'leader' ? newStaff.projectId : '' });
     setNewStaff({ name: '', username: '', password: '', role: 'leader', projectId: projects[0]?.id || '' });
   }
@@ -911,7 +1087,6 @@ function StaffManager({ users, projects, onAdd, onUpdate, onDelete, saving }) {
   );
 }
 
-// ── 관리자: 본인 계정(아이디/비번) 변경 ──────────────────
 function AdminAccountManager({ session, onUpdate, saving }) {
   const [username, setUsername] = useState(session.username);
   const [password, setPassword] = useState('');
@@ -927,122 +1102,26 @@ function AdminAccountManager({ session, onUpdate, saving }) {
   );
 }
 
-// ── 공무팀: 발주요청(지급자재 산출 물량) 입력 ─────────────
-function OrderManager({ orders, session, onAdd, onDelete, saving }) {
-  const [floor, setFloor] = useState('1F');
-  const [rowFrom, setRowFrom] = useState('A');
-  const [rowTo, setRowTo] = useState('A');
-  const [colFrom, setColFrom] = useState('1');
-  const [colTo, setColTo] = useState('1');
-  const [qtyMap, setQtyMap] = useState({}); // key: "품목|규격|색상" -> 수량
-  const [note, setNote] = useState('');
-
-  const nextOrderNo = Math.max(0, ...orders.map(o => Number(o.orderNo) || 0)) + 1;
-  const key = (n, s, c) => `${n}|${s}|${c}`;
-
-  function setQty(n, s, c, val) { setQtyMap({ ...qtyMap, [key(n, s, c)]: val }); }
-
-  function submit() {
-    const items = [];
-    CATALOG_NAMES.forEach(n => {
-      getSpecs(n).forEach(s => {
-        getColors(n, s).forEach(c => {
-          const val = qtyMap[key(n, s, c)];
-          if (val && Number(val) > 0) items.push({ itemName: n, itemSpec: s, itemColor: c, qty: val, unit: getUnits(n)[0] });
-        });
-      });
-    });
-    if (items.length === 0) { alert('확보물량을 하나 이상 입력해주세요.'); return; }
-    onAdd({ floor, rowFrom, rowTo, colFrom, colTo, note: note.trim(), createdBy: session.name, items });
-    setQtyMap({}); setNote('');
-  }
-
-  return (
-    <div>
-      <div className="mrs-card" style={{ padding: 18, marginBottom: 12 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <h3 className="mrs-display" style={{ fontSize: 15, margin: 0, fontWeight: 600 }}>발주요청 등록 (지급자재 산출 물량)</h3>
-          <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>지급자재 NO.{nextOrderNo}</span>
-        </div>
-
-        <label className="mrs-field-label">층</label>
-        <input className="mrs-input" value={floor} onChange={e => setFloor(e.target.value)} placeholder="층 (예: 1F)" style={{ marginBottom: 10, maxWidth: 140 }} />
-
-        <label className="mrs-field-label">구간 (행 / 열)</label>
-        <div className="mrs-zone-grid" style={{ marginBottom: 8 }}>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>행 시작</span><select className="mrs-select" value={rowFrom} onChange={e => setRowFrom(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>행 끝</span><select className="mrs-select" value={rowTo} onChange={e => setRowTo(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>열 시작</span><select className="mrs-select" value={colFrom} onChange={e => setColFrom(e.target.value)}>{COLS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>열 끝</span><select className="mrs-select" value={colTo} onChange={e => setColTo(e.target.value)}>{COLS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-        </div>
-      </div>
-
-      {CATALOG_NAMES.map(n => (
-        <div className="mrs-card" key={n} style={{ padding: 16, marginBottom: 10 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>{n}</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            {getSpecs(n).map(s => getColors(n, s).map(c => (
-              <div key={key(n, s, c)} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 12, color: 'var(--ink-soft)', minWidth: 56 }}>{c === 'N/A' ? s : `${s} ${c}`}</span>
-                <input className="mrs-input" type="number" min="0" value={qtyMap[key(n, s, c)] || ''} onChange={e => setQty(n, s, c, e.target.value)} placeholder="확보물량" />
-              </div>
-            )))}
-          </div>
-        </div>
-      ))}
-
-      <div className="mrs-card" style={{ padding: 16, marginBottom: 16 }}>
-        <label className="mrs-field-label">비고 (선택)</label>
-        <input className="mrs-input" value={note} onChange={e => setNote(e.target.value)} placeholder="" />
-      </div>
-
-      <button className="mrs-btn mrs-btn-primary" onClick={submit} disabled={saving} style={{ marginBottom: 24 }}>
-        <Plus size={15} /> 지급자재 NO.{nextOrderNo}로 저장
-      </button>
-
-      <div className="mrs-table-wrap">
-        <table className="mrs-table">
-          <thead><tr><th>NO</th><th>층</th><th>행시작</th><th>행끝</th><th>열시작</th><th>열끝</th><th>품목</th><th>규격</th><th>단위</th><th>확보물량</th><th>색상</th><th></th></tr></thead>
-          <tbody>
-            {orders.length === 0 ? (
-              <tr><td colSpan={12} style={{ textAlign: 'center', padding: 20, color: 'var(--ink-soft)' }}>등록된 발주요청이 없습니다.</td></tr>
-            ) : orders.slice().sort((a, b) => (Number(a.orderNo) || 0) - (Number(b.orderNo) || 0)).map(o => (
-              <tr key={o.id}>
-                <td className="mrs-mono">{o.orderNo}</td>
-                <td>{o.floor}</td>
-                <td>{o.rowFrom}</td><td>{o.rowTo}</td><td>{o.colFrom}</td><td>{o.colTo}</td>
-                <td style={{ fontWeight: 600 }}>{o.itemName}</td>
-                <td style={{ color: 'var(--ink-soft)' }}>{o.itemSpec}</td>
-                <td>{o.unit}</td>
-                <td className="mrs-mono">{o.qty}</td>
-                <td style={{ color: 'var(--ink-soft)' }}>{o.itemColor}</td>
-                <td><button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: '#B84B10' }} onClick={() => { if (confirm(`지급자재 NO.${o.orderNo} 전체를 삭제할까요?`)) onDelete(o.orderNo); }}><X size={15} /></button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-
 // ── 관리자 전체 화면 ────────────────────────────────────
-function AdminApp({ session, requests, projects, users, onUpdateStatus, onDelete, onSaveProjects, onAddUser, onUpdateUser, onDeleteUser, savingSettings }) {
+function AdminApp({ session, requests, returns, projects, users, zones, catalog, onUpdateStatus, onDelete, onSaveProjects, onSaveZones, onSaveCatalog, onAddUser, onUpdateUser, onDeleteUser, savingSettings }) {
   const [tab, setTab] = useState('today');
   return (
     <div className="mrs-body">
       <div className="mrs-tabs" style={{ margin: '-20px -20px 20px', padding: '0 20px' }}>
         <button className={`mrs-tab ${tab === 'today' ? 'active' : ''}`} onClick={() => setTab('today')}><CalendarDays size={16} /> 금일 자재요청</button>
         <button className={`mrs-tab ${tab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}><LayoutDashboard size={16} /> 누계 요청리스트</button>
+        <button className={`mrs-tab ${tab === 'returns' ? 'active' : ''}`} onClick={() => setTab('returns')}><PackageMinus size={16} /> 누계 반출리스트</button>
         <button className={`mrs-tab ${tab === 'manage' ? 'active' : ''}`} onClick={() => setTab('manage')}><Users size={16} /> 관리 설정</button>
       </div>
 
-      {tab === 'today' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="today" />}
-      {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" />}
+      {tab === 'today' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="today" allowPdf />}
+      {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" allowPdf />}
+      {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} />}
       {tab === 'manage' && (
         <div>
           <ProjectManager projects={projects} onSave={onSaveProjects} saving={savingSettings} />
+          <ZoneManager zones={zones} onSave={onSaveZones} saving={savingSettings} />
+          <CatalogManager catalog={catalog} onSave={onSaveCatalog} saving={savingSettings} />
           <StaffManager users={users} projects={projects} onAdd={onAddUser} onUpdate={onUpdateUser} onDelete={onDeleteUser} saving={savingSettings} />
           <AdminAccountManager session={session} onUpdate={onUpdateUser} saving={savingSettings} />
         </div>
@@ -1051,23 +1130,21 @@ function AdminApp({ session, requests, projects, users, onUpdateStatus, onDelete
   );
 }
 
-// ── 자재팀: 현장 출고 대기 ──────────────────────────────
+// ── 자재팀: 발주확인 대기 ──────────────────────────────
 function MaterialOutbound({ requests, projects, onUpdateStatus }) {
   const projectNameById = {};
   projects.forEach(p => { projectNameById[p.id] = p.name; });
-
   const rows = [];
   requests.forEach(r => {
     r.items.forEach(it => {
       if (it.status !== '요청됨') return;
       rows.push({
         reqId: r.id, itemId: it.id, requester: r.requester, projectName: projectNameById[r.projectId] || '-',
-        zone: r.zone, name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit, status: it.status, createdAt: r.createdAt,
+        zoneName: r.zoneName || '', name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit, status: it.status, createdAt: r.createdAt,
       });
     });
   });
   rows.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-
   return (
     <div>
       {rows.length === 0 ? (
@@ -1079,7 +1156,7 @@ function MaterialOutbound({ requests, projects, onUpdateStatus }) {
             <tbody>
               {rows.map(r => (
                 <tr key={r.itemId}>
-                  <td>{r.requester}</td><td>{r.projectName}</td><td>{r.zone}</td>
+                  <td>{r.requester}</td><td>{r.projectName}</td><td>{r.zoneName}</td>
                   <td style={{ fontWeight: 600 }}>{r.name}</td><td style={{ color: 'var(--ink-soft)' }}>{r.spec}</td><td style={{ color: 'var(--ink-soft)' }}>{r.color}</td>
                   <td className="mrs-mono">{r.qty} {r.unit}</td>
                   <td><StatusBadge value={r.status} /></td>
@@ -1094,82 +1171,14 @@ function MaterialOutbound({ requests, projects, onUpdateStatus }) {
   );
 }
 
-// ── 자재팀: 잔여물량 현황 (발주물량 - 현장입고 = 잔여물량) ──
-function MaterialBalance({ orders, requests }) {
-  const shippedItems = [];
-  requests.forEach(r => {
-    r.items.forEach(it => {
-      if (it.status !== '입고완료') return;
-      shippedItems.push({ name: it.name, spec: it.spec, color: it.color, qty: Number(it.qty) || 0, floor: r.floor, rowFrom: r.rowFrom, rowTo: r.rowTo, colFrom: r.colFrom, colTo: r.colTo, requester: r.requester, zone: r.zone });
-    });
-  });
-
-  const rows = orders.map(o => {
-    const matched = shippedItems.filter(it => sameItem(it, o) && zoneContained(it, o));
-    const shipped = matched.reduce((sum, it) => sum + it.qty, 0);
-    return { ...o, shipped, remain: (Number(o.qty) || 0) - shipped };
-  });
-
-  const unmatched = shippedItems.filter(it => !orders.some(o => sameItem(it, o) && zoneContained(it, o)));
-
-  return (
-    <div>
-      <div className="mrs-table-wrap" style={{ marginBottom: 20 }}>
-        <table className="mrs-table">
-          <thead><tr><th>NO</th><th>층</th><th>구간</th><th>품목</th><th>규격</th><th>색상</th><th>발주물량</th><th>현장입고</th><th>잔여물량</th></tr></thead>
-          <tbody>
-            {rows.length === 0 ? (
-              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 20, color: 'var(--ink-soft)' }}>등록된 발주요청이 없습니다.</td></tr>
-            ) : rows.map(r => (
-              <tr key={r.id}>
-                <td className="mrs-mono">{r.orderNo}</td>
-                <td>{r.floor}</td>
-                <td>{fmtZone(r.rowFrom, r.rowTo, r.colFrom, r.colTo)}</td>
-                <td style={{ fontWeight: 600 }}>{r.itemName}</td>
-                <td style={{ color: 'var(--ink-soft)' }}>{r.itemSpec}</td>
-                <td style={{ color: 'var(--ink-soft)' }}>{r.itemColor}</td>
-                <td className="mrs-mono">{r.qty} {r.unit}</td>
-                <td className="mrs-mono">{r.shipped} {r.unit}</td>
-                <td className="mrs-mono" style={{ fontWeight: 700, color: r.remain < 0 ? '#B84B10' : '#2E6B47' }}>{r.remain} {r.unit}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <h3 className="mrs-display" style={{ fontSize: 14, margin: '0 0 10px', fontWeight: 600, color: 'var(--ink-soft)' }}>미지정 출고내역 (매칭되는 발주요청 없음)</h3>
-      {unmatched.length === 0 ? (
-        <div className="mrs-card mrs-empty" style={{ padding: 20 }}>없습니다.</div>
-      ) : (
-        <div className="mrs-table-wrap">
-          <table className="mrs-table">
-            <thead><tr><th>요청자</th><th>구역</th><th>품목</th><th>규격</th><th>색상</th><th>수량</th></tr></thead>
-            <tbody>
-              {unmatched.map((it, i) => (
-                <tr key={i}>
-                  <td>{it.requester}</td><td>{it.zone}</td>
-                  <td style={{ fontWeight: 600 }}>{it.name}</td><td style={{ color: 'var(--ink-soft)' }}>{it.spec}</td><td style={{ color: 'var(--ink-soft)' }}>{it.color}</td>
-                  <td className="mrs-mono">{it.qty}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── 자재팀: 반출 대기 / 반출확인 ────────────────────────
+// ── 자재팀: 반출확인 대기 ──────────────────────────────
 function MaterialReturns({ returns, onConfirmReturn, saving }) {
   const [confirmingId, setConfirmingId] = useState(null);
   const pending = returns.filter(r => r.status !== '반출확인완료').slice().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-
   async function handleConfirm(r, sig) {
     await onConfirmReturn(r.id, sig);
     setConfirmingId(null);
   }
-
   return (
     <div>
       {pending.length === 0 ? (
@@ -1180,7 +1189,7 @@ function MaterialReturns({ returns, onConfirmReturn, saving }) {
             <span style={{ fontSize: 14, fontWeight: 600 }}>{r.requester}</span>
             <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{fmtDate(r.createdAt)}</span>
           </div>
-          <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>{r.floor} {r.zone}{r.reason ? ` · ${r.reason}` : ''}</div>
+          <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>{r.zoneName}{r.reason ? ` · ${r.reason}` : ''}</div>
           {r.items.map(it => (
             <div key={it.id} style={{ fontSize: 13, padding: '3px 0' }}>{it.name} {it.spec} · {it.qty}{it.unit}</div>
           ))}
@@ -1201,36 +1210,36 @@ function MaterialReturns({ returns, onConfirmReturn, saving }) {
   );
 }
 
-// ── 자재팀 전체 화면 ────────────────────────────────────
-function MaterialApp({ requests, projects, orders, returns, onUpdateStatus, onDelete, onConfirmReturn, savingSettings }) {
+function MaterialApp({ requests, projects, returns, onUpdateStatus, onDelete, onConfirmReturn, savingSettings }) {
   const [tab, setTab] = useState('outbound');
   return (
     <div className="mrs-body">
       <div className="mrs-tabs" style={{ margin: '-20px -20px 20px', padding: '0 20px' }}>
         <button className={`mrs-tab ${tab === 'outbound' ? 'active' : ''}`} onClick={() => setTab('outbound')}><ClipboardList size={16} /> 발주확인 대기</button>
-        <button className={`mrs-tab ${tab === 'return' ? 'active' : ''}`} onClick={() => setTab('return')}><PackageMinus size={16} /> 반출확인 대기</button>
         <button className={`mrs-tab ${tab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}><LayoutDashboard size={16} /> 누계 요청리스트</button>
-        <button className={`mrs-tab ${tab === 'balance' ? 'active' : ''}`} onClick={() => setTab('balance')}><CalendarDays size={16} /> 잔여물량 현황</button>
+        <button className={`mrs-tab ${tab === 'return' ? 'active' : ''}`} onClick={() => setTab('return')}><PackageMinus size={16} /> 반출확인 대기</button>
+        <button className={`mrs-tab ${tab === 'returns' ? 'active' : ''}`} onClick={() => setTab('returns')}><CalendarDays size={16} /> 누계 반출리스트</button>
       </div>
       {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} />}
+      {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" allowPdf />}
       {tab === 'return' && <MaterialReturns returns={returns} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
-      {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" />}
-      {tab === 'balance' && <MaterialBalance orders={orders} requests={requests} />}
+      {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} />}
     </div>
   );
 }
 
-
+// ── 최상위 App ──────────────────────────────────────────
 export default function App() {
   const [session, setSession] = useState(null);
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState(null);
 
   const [requests, setRequests] = useState([]);
+  const [returns, setReturns] = useState([]);
   const [projects, setProjects] = useState(DEFAULT_PROJECTS);
   const [users, setUsers] = useState([]);
-  const [orders, setOrders] = useState([]);
-  const [returns, setReturns] = useState([]);
+  const [zones, setZones] = useState([]);
+  const [catalog, setCatalog] = useState([]);
   const [dataLoading, setDataLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
@@ -1253,16 +1262,15 @@ export default function App() {
   async function loadData(role) {
     setDataLoading(true); setError(null);
     try {
-      const calls = [apiGet('list'), apiGet('projects'), apiGet('returns')];
+      const calls = [apiGet('list'), apiGet('projects'), apiGet('returns'), apiGet('zones'), apiGet('catalog')];
       if (role === 'admin') calls.push(apiGet('users'));
-      if (role === 'admin' || role === 'material') calls.push(apiGet('orders'));
       const results = await Promise.all(calls);
       setRequests(Array.isArray(results[0]) ? results[0] : []);
       setProjects(Array.isArray(results[1]) && results[1].length ? results[1] : DEFAULT_PROJECTS);
       setReturns(Array.isArray(results[2]) ? results[2] : []);
-      let idx = 3;
-      if (role === 'admin') { setUsers(Array.isArray(results[idx]) ? results[idx] : []); idx++; }
-      if (role === 'admin' || role === 'material') { setOrders(Array.isArray(results[idx]) ? results[idx] : []); }
+      setZones(Array.isArray(results[3]) ? results[3] : []);
+      setCatalog(Array.isArray(results[4]) ? results[4] : []);
+      if (role === 'admin') setUsers(Array.isArray(results[5]) ? results[5] : []);
     } catch (e) {
       setError('데이터를 불러오지 못했습니다. 네트워크를 확인해주세요.');
     } finally {
@@ -1270,9 +1278,13 @@ export default function App() {
     }
   }
 
+  async function handleRefresh() {
+    if (!session) return;
+    await loadData(session.role);
+  }
+
   async function handleSubmit(payload) {
-    const next = [payload, ...requests];
-    setRequests(next);
+    setRequests([payload, ...requests]);
     setSaving(true); setError(null);
     try { await apiPost('addRequest', { payload }); }
     catch (e) { setError('요청 저장에 실패했습니다.'); await loadData(session.role); }
@@ -1289,7 +1301,6 @@ export default function App() {
   }
 
   async function handleConfirmReceipt(reqId, sig) {
-    const data = { reqId, ...sig };
     const next = requests.map(r => r.id !== reqId ? r : {
       ...r, items: r.items.map(it => ({ ...it, status: '입고완료' })),
       deliverName: sig.deliverName, deliverSignature: sig.deliverSignature,
@@ -1297,13 +1308,20 @@ export default function App() {
     });
     setRequests(next);
     setSaving(true); setError(null);
-    try { await apiPost('confirmReceipt', { data }); }
+    try { await apiPost('confirmReceipt', { data: { reqId, ...sig } }); }
     catch (e) { setError('입고확인에 실패했습니다.'); await loadData(session.role); }
     finally { setSaving(false); }
   }
 
+  async function handleDelete(reqId) {
+    setRequests(requests.filter(r => r.id !== reqId));
+    setSaving(true); setError(null);
+    try { await apiPost('deleteRequest', { reqId }); }
+    catch (e) { setError('삭제에 실패했습니다.'); await loadData(session.role); }
+    finally { setSaving(false); }
+  }
+
   async function handleSubmitReturn(payload) {
-    const next = [payload, ...returns].map(r => r.status ? r : { ...r, status: '반출요청' });
     setReturns([{ ...payload, status: '반출요청' }, ...returns]);
     setSaving(true); setError(null);
     try { await apiPost('addReturn', { payload }); }
@@ -1324,19 +1342,24 @@ export default function App() {
     finally { setSavingSettings(false); }
   }
 
-  async function handleDelete(reqId) {
-    const next = requests.filter(r => r.id !== reqId);
-    setRequests(next);
-    setSaving(true); setError(null);
-    try { await apiPost('deleteRequest', { reqId }); }
-    catch (e) { setError('삭제에 실패했습니다.'); await loadData(session.role); }
-    finally { setSaving(false); }
-  }
-
   async function handleSaveProjects(next) {
     setSavingSettings(true); setError(null);
     try { await apiPost('saveProjects', { projects: next }); setProjects(next); }
     catch (e) { setError('프로젝트 저장에 실패했습니다.'); }
+    finally { setSavingSettings(false); }
+  }
+
+  async function handleSaveZones(next) {
+    setSavingSettings(true); setError(null);
+    try { await apiPost('saveZones', { zones: next }); setZones(next); }
+    catch (e) { setError('구역 저장에 실패했습니다.'); }
+    finally { setSavingSettings(false); }
+  }
+
+  async function handleSaveCatalog(next) {
+    setSavingSettings(true); setError(null);
+    try { await apiPost('saveCatalog', { items: next }); setCatalog(next); }
+    catch (e) { setError('품목 저장에 실패했습니다.'); }
     finally { setSavingSettings(false); }
   }
 
@@ -1346,7 +1369,7 @@ export default function App() {
       const res = await apiPost('addUser', { user });
       if (res.error) { alert(res.error); return; }
       await loadData('admin');
-    } catch (e) { setError('팀장 추가에 실패했습니다.'); }
+    } catch (e) { setError('계정 추가에 실패했습니다.'); }
     finally { setSavingSettings(false); }
   }
 
@@ -1368,26 +1391,6 @@ export default function App() {
       if (res.error) { alert(res.error); return; }
       await loadData('admin');
     } catch (e) { setError('계정 삭제에 실패했습니다.'); }
-    finally { setSavingSettings(false); }
-  }
-
-  async function handleAddOrder(order) {
-    setSavingSettings(true); setError(null);
-    try {
-      const res = await apiPost('addOrder', { order });
-      if (res.error) { alert(res.error); return; }
-      await loadData(session.role);
-    } catch (e) { setError('발주요청 등록에 실패했습니다.'); }
-    finally { setSavingSettings(false); }
-  }
-
-  async function handleDeleteOrder(orderNo) {
-    setSavingSettings(true); setError(null);
-    try {
-      const res = await apiPost('deleteOrder', { orderNo });
-      if (res.error) { alert(res.error); return; }
-      await loadData(session.role);
-    } catch (e) { setError('발주요청 삭제에 실패했습니다.'); }
     finally { setSavingSettings(false); }
   }
 
@@ -1413,7 +1416,10 @@ export default function App() {
             {session.role === 'admin' ? '관리자' : session.role === 'material' ? '자재팀' : '팀장'}
           </span>
           <span className="mrs-user-chip">{session.name}</span>
-          <button className="mrs-logout-btn" onClick={() => { setSession(null); setRequests([]); setUsers([]); setOrders([]); setReturns([]); }}><LogOut size={13} /> 로그아웃</button>
+          <button className="mrs-refresh-btn" onClick={handleRefresh} disabled={dataLoading} title="새로고침">
+            <RefreshCw size={13} className={dataLoading ? 'mrs-spin' : ''} /> 새로고침
+          </button>
+          <button className="mrs-logout-btn" onClick={() => { setSession(null); setRequests([]); setReturns([]); setUsers([]); setZones([]); setCatalog([]); }}><LogOut size={13} /> 로그아웃</button>
         </div>
       </div>
 
@@ -1427,15 +1433,16 @@ export default function App() {
         <div className="mrs-empty"><Loader2 size={20} className="mrs-spin" /><div style={{ marginTop: 8 }}>불러오는 중...</div></div>
       ) : session.role === 'admin' ? (
         <AdminApp
-          session={session} requests={requests} projects={projects} users={users}
-          onUpdateStatus={handleUpdateStatus} onDelete={handleDelete} onSaveProjects={handleSaveProjects}
+          session={session} requests={requests} returns={returns} projects={projects} users={users} zones={zones} catalog={catalog}
+          onUpdateStatus={handleUpdateStatus} onDelete={handleDelete}
+          onSaveProjects={handleSaveProjects} onSaveZones={handleSaveZones} onSaveCatalog={handleSaveCatalog}
           onAddUser={handleAddUser} onUpdateUser={handleUpdateUser} onDeleteUser={handleDeleteUser}
           savingSettings={savingSettings}
         />
       ) : session.role === 'material' ? (
-        <MaterialApp requests={requests} projects={projects} orders={orders} returns={returns} onUpdateStatus={handleUpdateStatus} onDelete={handleDelete} onConfirmReturn={handleConfirmReturn} savingSettings={savingSettings} />
+        <MaterialApp requests={requests} projects={projects} returns={returns} onUpdateStatus={handleUpdateStatus} onDelete={handleDelete} onConfirmReturn={handleConfirmReturn} savingSettings={savingSettings} />
       ) : (
-        <LeaderApp session={session} requests={requests} returns={returns} projects={projects} onSubmit={handleSubmit} onSubmitReturn={handleSubmitReturn} onConfirmReceipt={handleConfirmReceipt} saving={saving} />
+        <LeaderApp session={session} requests={requests} returns={returns} projects={projects} catalog={catalog} zones={zones} onSubmit={handleSubmit} onSubmitReturn={handleSubmitReturn} onConfirmReceipt={handleConfirmReceipt} onDeleteRequest={handleDelete} saving={saving} />
       )}
     </div>
   );
