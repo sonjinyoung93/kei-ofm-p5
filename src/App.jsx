@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
-import { Plus, Trash2, Download, ClipboardList, LayoutDashboard, Loader2, AlertCircle, CheckCircle2, X, Settings, Save, LogOut, Building2, Users, ListChecks, CalendarDays, Lock } from 'lucide-react';
+import jsPDF from 'jspdf';
+import { Plus, Trash2, Download, ClipboardList, LayoutDashboard, Loader2, AlertCircle, CheckCircle2, X, Settings, Save, LogOut, Building2, Users, ListChecks, CalendarDays, Lock, PenLine, PackageMinus } from 'lucide-react';
 
 const ROWS = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
 const COLS = Array.from({ length: 70 }, (_, i) => String(i + 1));
@@ -53,7 +54,7 @@ const DEFAULT_PROJECTS = [
 ];
 
 // ⚠️ 구글 Apps Script를 "웹 앱으로 배포"한 뒤 나오는 URL로 반드시 교체하세요.
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwVPkUPP93WpzWhZLZ4F4fOkQkC5HQ-h1UM7cK72MzdCJ4oxfT5ALwA6GsDj-LSJbpW/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec';
 
 async function apiGet(action) {
   const res = await fetch(`${APPS_SCRIPT_URL}?action=${action}`);
@@ -105,6 +106,117 @@ function zoneContained(req, order) {
   return rF >= oRF && rT <= oRT && cF >= oCF && cT <= oCT;
 }
 function sameItem(a, b) { return a.name === b.itemName && a.spec === b.itemSpec && a.color === b.itemColor; }
+
+// ── 손글씨 서명패드 ──────────────────────────────────────
+function SignaturePad({ onChange }) {
+  const canvasRef = useRef(null);
+  const drawing = useRef(false);
+  const [empty, setEmpty] = useState(true);
+
+  function getPos(e, canvas) {
+    const rect = canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+  function start(e) {
+    drawing.current = true;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const { x, y } = getPos(e, canvas);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+  }
+  function move(e) {
+    if (!drawing.current) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const { x, y } = getPos(e, canvas);
+    ctx.lineTo(x, y);
+    ctx.strokeStyle = '#1C2A33';
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    if (empty) setEmpty(false);
+  }
+  function end() {
+    if (!drawing.current) return;
+    drawing.current = false;
+    const canvas = canvasRef.current;
+    onChange(canvas.toDataURL('image/png'));
+  }
+  function clear() {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    setEmpty(true);
+    onChange('');
+  }
+
+  return (
+    <div>
+      <canvas
+        ref={canvasRef} width={280} height={120}
+        style={{ width: '100%', maxWidth: 280, height: 120, background: '#fff', border: '1px solid var(--line)', borderRadius: 4, touchAction: 'none', cursor: 'crosshair' }}
+        onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerLeave={end}
+      />
+      <button type="button" className="mrs-btn mrs-btn-ghost" style={{ marginTop: 6, padding: '4px 10px', fontSize: 12 }} onClick={clear}>지우고 다시 서명</button>
+    </div>
+  );
+}
+
+// ── 거래명세표 / 반출확인서 PDF 생성 ──────────────────────
+function generateDocPdf({ title, docNo, dateStr, projectName, zoneStr, items, deliverLabel, deliverName, deliverSignature, receiveLabel, receiveName, receiveSignature }) {
+  const doc = new jsPDF({ unit: 'mm', format: 'a5' });
+  const pw = doc.internal.pageSize.getWidth();
+  let y = 16;
+
+  doc.setFontSize(16);
+  doc.text(title, pw / 2, y, { align: 'center' });
+  y += 6;
+  doc.setFontSize(9);
+  doc.setTextColor(120);
+  doc.text(docNo, pw / 2, y, { align: 'center' });
+  doc.setTextColor(0);
+  y += 10;
+
+  doc.setFontSize(10);
+  doc.text(`일자: ${dateStr}`, 14, y);
+  doc.text(`프로젝트: ${projectName || '-'}`, pw - 14, y, { align: 'right' });
+  y += 6;
+  doc.text(`구역: ${zoneStr || '-'}`, 14, y);
+  y += 8;
+
+  doc.setDrawColor(200);
+  doc.line(14, y, pw - 14, y);
+  y += 6;
+  doc.setFontSize(9);
+  doc.text('품목', 14, y); doc.text('규격', 60, y); doc.text('수량', pw - 14, y, { align: 'right' });
+  y += 4;
+  doc.line(14, y, pw - 14, y);
+  y += 6;
+  items.forEach(it => {
+    doc.text(String(it.name), 14, y);
+    doc.text(String(it.spec || '-'), 60, y);
+    doc.text(`${it.qty} ${it.unit}`, pw - 14, y, { align: 'right' });
+    y += 6;
+  });
+  y += 6;
+
+  const boxW = (pw - 14 * 2 - 8) / 2;
+  const boxH = 40;
+  doc.setDrawColor(150);
+  doc.rect(14, y, boxW, boxH);
+  doc.rect(14 + boxW + 8, y, boxW, boxH);
+  doc.setFontSize(9);
+  doc.text(deliverLabel, 14 + boxW / 2, y + 6, { align: 'center' });
+  doc.text(receiveLabel, 14 + boxW + 8 + boxW / 2, y + 6, { align: 'center' });
+  if (deliverSignature) { try { doc.addImage(deliverSignature, 'PNG', 16, y + 9, boxW - 4, boxH - 18); } catch (e) {} }
+  if (receiveSignature) { try { doc.addImage(receiveSignature, 'PNG', 14 + boxW + 10, y + 9, boxW - 4, boxH - 18); } catch (e) {} }
+  doc.setFontSize(8);
+  doc.text(deliverName || '', 14 + boxW / 2, y + boxH - 3, { align: 'center' });
+  doc.text(receiveName || '', 14 + boxW + 8 + boxW / 2, y + boxH - 3, { align: 'center' });
+
+  doc.save(`${title}_${docNo}.pdf`);
+}
 function newItemRow() {
   const name = CATALOG_NAMES[0];
   const spec = getSpecs(name)[0];
@@ -354,47 +466,75 @@ function RequestForm({ session, projectName, onSubmit, saving }) {
 }
 
 // ── 팀장: 본인 요청 리스트 ──────────────────────────────
-function MyRequestList({ requests, session }) {
-  const rows = [];
-  requests
+function MyRequestList({ requests, session, projects, onConfirmReceipt, saving }) {
+  const [confirmingReqId, setConfirmingReqId] = useState(null);
+  const projectNameById = {};
+  projects.forEach(p => { projectNameById[p.id] = p.name; });
+
+  const mine = requests
     .filter(r => (r.username ? r.username === session.username : r.requester === session.name))
-    .forEach(r => {
-      r.items.forEach(it => {
-        rows.push({ reqNo: r.reqNo, createdAt: r.createdAt, zone: r.zone, process: r.process, note: r.note, ...it });
-      });
+    .slice()
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  function allConfirmed(r) { return r.items.every(it => it.status === '확인됨' || it.status === '입고완료'); }
+  function isDelivered(r) { return r.items.every(it => it.status === '입고완료'); }
+
+  async function handleConfirm(r, sig) {
+    await onConfirmReceipt(r.id, sig);
+    setConfirmingReqId(null);
+  }
+
+  function downloadPdf(r) {
+    generateDocPdf({
+      title: '거래명세표', docNo: r.reqNo, dateStr: fmtDate(r.confirmedAt || r.createdAt),
+      projectName: projectNameById[r.projectId], zoneStr: `${r.floor || ''} ${r.zone}`,
+      items: r.items, deliverLabel: '인도자 (자재팀)', deliverName: r.deliverName, deliverSignature: r.deliverSignature,
+      receiveLabel: '인수자 (현장팀장)', receiveName: r.receiveName, receiveSignature: r.receiveSignature,
     });
-  rows.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  }
 
   return (
     <div>
       <h2 className="mrs-display" style={{ fontSize: 18, margin: '0 0 14px', fontWeight: 600 }}>요청리스트</h2>
-      {rows.length === 0 ? (
+      {mine.length === 0 ? (
         <div className="mrs-card mrs-empty">제출한 요청이 없습니다.</div>
-      ) : (
-        <div className="mrs-table-wrap">
-          <table className="mrs-table">
-            <thead><tr><th>요청번호</th><th>요청일시</th><th>구역</th><th>공정</th><th>품목명</th><th>규격</th><th>수량</th><th>상태</th></tr></thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={i}>
-                  <td className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{r.reqNo}</td>
-                  <td className="mrs-mono" style={{ fontSize: 12 }}>{fmtDate(r.createdAt)}</td>
-                  <td>{r.zone}</td><td>{r.process}</td>
-                  <td style={{ fontWeight: 600 }}>{r.name}</td><td style={{ color: 'var(--ink-soft)' }}>{r.spec || '-'}</td>
-                  <td className="mrs-mono">{r.qty} {r.unit}</td>
-                  <td><StatusBadge value={r.status} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      ) : mine.map(r => (
+        <div className="mrs-card" key={r.id} style={{ padding: 16, marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 6 }}>
+            <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{r.reqNo}</span>
+            <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{fmtDate(r.createdAt)}</span>
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 10 }}>{r.floor} {r.zone}</div>
+          {r.items.map(it => (
+            <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px dashed var(--paper-line)' }}>
+              <span style={{ fontSize: 13 }}><b>{it.name}</b> {it.spec}{it.color && it.color !== 'N/A' ? ` ${it.color}` : ''} · {it.qty}{it.unit}</span>
+              <StatusBadge value={it.status} />
+            </div>
+          ))}
+
+          {isDelivered(r) ? (
+            <button className="mrs-btn mrs-btn-ghost" style={{ marginTop: 12 }} onClick={() => downloadPdf(r)}><Download size={15} /> 거래명세표 다운로드</button>
+          ) : allConfirmed(r) && confirmingReqId !== r.id ? (
+            <button className="mrs-btn mrs-btn-primary" style={{ marginTop: 12 }} onClick={() => setConfirmingReqId(r.id)}><PenLine size={15} /> 입고확인</button>
+          ) : null}
+
+          {confirmingReqId === r.id && (
+            <ConfirmSignaturePanel
+              deliverLabel="인도자 (자재팀)" receiveLabel="인수자 (현장팀장)"
+              receiveNameDefault={session.name}
+              onCancel={() => setConfirmingReqId(null)}
+              onSubmit={sig => handleConfirm(r, sig)}
+              saving={saving}
+            />
+          )}
         </div>
-      )}
+      ))}
     </div>
   );
 }
 
 // ── 팀장 전체 화면 ──────────────────────────────────────
-function LeaderApp({ session, requests, projects, onSubmit, saving }) {
+function LeaderApp({ session, requests, returns, projects, onSubmit, onSubmitReturn, onConfirmReceipt, saving }) {
   const [tab, setTab] = useState('form');
   const projectName = (projects.find(p => p.id === session.projectId) || {}).name || '(알 수 없음)';
   return (
@@ -402,15 +542,152 @@ function LeaderApp({ session, requests, projects, onSubmit, saving }) {
       <div className="mrs-tabs" style={{ margin: '-20px -20px 20px', padding: '0 20px' }}>
         <button className={`mrs-tab ${tab === 'form' ? 'active' : ''}`} onClick={() => setTab('form')}><ClipboardList size={16} /> 자재요청 시트</button>
         <button className={`mrs-tab ${tab === 'mylist' ? 'active' : ''}`} onClick={() => setTab('mylist')}><ListChecks size={16} /> 요청리스트</button>
+        <button className={`mrs-tab ${tab === 'return' ? 'active' : ''}`} onClick={() => setTab('return')}><PackageMinus size={16} /> 물량반출</button>
       </div>
-      {tab === 'form'
-        ? <RequestForm session={session} projectName={projectName} onSubmit={onSubmit} saving={saving} />
-        : <MyRequestList requests={requests} session={session} />}
+      {tab === 'form' && <RequestForm session={session} projectName={projectName} onSubmit={onSubmit} saving={saving} />}
+      {tab === 'mylist' && <MyRequestList requests={requests} session={session} projects={projects} onConfirmReceipt={onConfirmReceipt} saving={saving} />}
+      {tab === 'return' && <ReturnPanel session={session} projectName={projectName} returns={returns} onSubmit={onSubmitReturn} saving={saving} />}
     </div>
   );
 }
 
-// ── 관리자: 요청 테이블 (금일/누계 공용) ─────────────────
+// ── 팀장: 물량반출 입력 + 본인 반출내역 ─────────────────
+function ReturnPanel({ session, projectName, returns, onSubmit, saving }) {
+  const [floor, setFloor] = useState(FLOORS[0]);
+  const [rowFrom, setRowFrom] = useState('A');
+  const [rowTo, setRowTo] = useState('A');
+  const [colFrom, setColFrom] = useState('1');
+  const [colTo, setColTo] = useState('1');
+  const [reason, setReason] = useState('');
+  const [items, setItems] = useState([newItemRow()]);
+  const [justSubmitted, setJustSubmitted] = useState(false);
+
+  function updateItem(id, updated) { setItems(items.map(it => it.id === id ? updated : it)); }
+  function addItem() { setItems([...items, newItemRow()]); }
+  function removeItem(id) { if (items.length === 1) return; setItems(items.filter(it => it.id !== id)); }
+
+  async function handleSubmit() {
+    const valid = items.filter(it => it.name && it.qty !== '' && Number(it.qty) > 0);
+    if (valid.length === 0) { alert('최소 1개 이상의 품목에 수량을 입력해주세요.'); return; }
+    const payload = {
+      id: genId(), reqNo: genReqNo(), requester: session.name, username: session.username,
+      projectId: session.projectId, floor, zone: fmtZone(rowFrom, rowTo, colFrom, colTo),
+      rowFrom, rowTo, colFrom, colTo, reason: reason.trim(), createdAt: new Date().toISOString(),
+      items: valid.map(it => ({ id: genId(), name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit })),
+    };
+    await onSubmit(payload);
+    setFloor(FLOORS[0]); setRowFrom('A'); setRowTo('A'); setColFrom('1'); setColTo('1');
+    setReason(''); setItems([newItemRow()]);
+    setJustSubmitted(true);
+    setTimeout(() => setJustSubmitted(false), 3000);
+  }
+
+  const mine = returns
+    .filter(r => (r.username ? r.username === session.username : r.requester === session.name))
+    .slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  function downloadPdf(r) {
+    generateDocPdf({
+      title: '반출확인서', docNo: r.reqNo, dateStr: fmtDate(r.confirmedAt || r.createdAt),
+      projectName, zoneStr: `${r.floor || ''} ${r.zone}`,
+      items: r.items, deliverLabel: '인도자 (현장팀장)', deliverName: r.deliverName, deliverSignature: r.deliverSignature,
+      receiveLabel: '인수자 (자재팀)', receiveName: r.receiveName, receiveSignature: r.receiveSignature,
+    });
+  }
+
+  return (
+    <div>
+      <div className="mrs-card" style={{ padding: 22, marginBottom: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+          <h2 className="mrs-display" style={{ fontSize: 18, margin: 0, fontWeight: 600 }}>물량반출 요청</h2>
+          <span className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>RETURN REQUEST</span>
+        </div>
+
+        <label className="mrs-field-label">구역 (층 / 행 / 열)</label>
+        <div className="mrs-zone-grid mrs-zone-grid-5" style={{ marginBottom: 14 }}>
+          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>층</span><select className="mrs-select" value={floor} onChange={e => setFloor(e.target.value)}>{FLOORS.map(f => <option key={f} value={f}>{f}</option>)}</select></div>
+          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>행 시작</span><select className="mrs-select" value={rowFrom} onChange={e => setRowFrom(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
+          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>행 끝</span><select className="mrs-select" value={rowTo} onChange={e => setRowTo(e.target.value)}>{ROWS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
+          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>열 시작</span><select className="mrs-select" value={colFrom} onChange={e => setColFrom(e.target.value)}>{COLS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>열 끝</span><select className="mrs-select" value={colTo} onChange={e => setColTo(e.target.value)}>{COLS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+        </div>
+
+        <div style={{ marginBottom: 8 }}><label className="mrs-field-label">반출 품목</label></div>
+        <div className="mrs-item-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
+          <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목</span><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
+          <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>수량</span><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>단위</span>
+          <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span><span></span>
+        </div>
+        {items.map(it => <ItemRowEditor key={it.id} item={it} onChange={u => updateItem(it.id, u)} onRemove={() => removeItem(it.id)} removable={items.length > 1} />)}
+        <button className="mrs-btn mrs-btn-ghost" style={{ marginTop: 10 }} onClick={addItem}><Plus size={15} /> 품목 추가</button>
+
+        <div style={{ marginTop: 18 }}>
+          <label className="mrs-field-label">반출 사유 (선택)</label>
+          <input className="mrs-input" value={reason} onChange={e => setReason(e.target.value)} placeholder="" />
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 22 }}>
+          <button className="mrs-btn mrs-btn-primary" onClick={handleSubmit} disabled={saving}>
+            {saving ? <Loader2 size={15} className="mrs-spin" /> : <PackageMinus size={15} />} 반출 요청 제출
+          </button>
+          {justSubmitted && <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#2E6B47', fontSize: 13, fontWeight: 600 }}><CheckCircle2 size={16} /> 요청이 접수되었습니다</span>}
+        </div>
+      </div>
+
+      <h3 className="mrs-display" style={{ fontSize: 15, margin: '0 0 12px', fontWeight: 600 }}>반출내역</h3>
+      {mine.length === 0 ? (
+        <div className="mrs-card mrs-empty">제출한 반출요청이 없습니다.</div>
+      ) : mine.map(r => (
+        <div className="mrs-card" key={r.id} style={{ padding: 16, marginBottom: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{r.reqNo}</span>
+            <StatusBadge value={r.status} />
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>{r.floor} {r.zone}</div>
+          {r.items.map(it => (
+            <div key={it.id} style={{ fontSize: 13, padding: '3px 0' }}>{it.name} {it.spec} · {it.qty}{it.unit}</div>
+          ))}
+          {r.status === '반출확인완료' && (
+            <button className="mrs-btn mrs-btn-ghost" style={{ marginTop: 10 }} onClick={() => downloadPdf(r)}><Download size={15} /> 반출확인서 다운로드</button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+function ConfirmSignaturePanel({ deliverLabel, receiveLabel, deliverNameDefault, receiveNameDefault, onCancel, onSubmit, saving }) {
+  const [deliverName, setDeliverName] = useState(deliverNameDefault || '');
+  const [receiveName, setReceiveName] = useState(receiveNameDefault || '');
+  const [deliverSig, setDeliverSig] = useState('');
+  const [receiveSig, setReceiveSig] = useState('');
+
+  function submit() {
+    if (!deliverName.trim() || !receiveName.trim()) { alert('인도자, 인수자 이름을 모두 입력해주세요.'); return; }
+    if (!deliverSig || !receiveSig) { alert('양쪽 서명을 모두 받아주세요.'); return; }
+    onSubmit({ deliverName: deliverName.trim(), deliverSignature: deliverSig, receiveName: receiveName.trim(), receiveSignature: receiveSig });
+  }
+
+  return (
+    <div className="mrs-card" style={{ padding: 16, marginTop: 10, background: '#F1EFE9' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        <div>
+          <label className="mrs-field-label">{deliverLabel}</label>
+          <input className="mrs-input" value={deliverName} onChange={e => setDeliverName(e.target.value)} placeholder="이름" style={{ marginBottom: 8 }} />
+          <SignaturePad onChange={setDeliverSig} />
+        </div>
+        <div>
+          <label className="mrs-field-label">{receiveLabel}</label>
+          <input className="mrs-input" value={receiveName} onChange={e => setReceiveName(e.target.value)} placeholder="이름" style={{ marginBottom: 8 }} />
+          <SignaturePad onChange={setReceiveSig} />
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+        <button className="mrs-btn mrs-btn-primary" onClick={submit} disabled={saving}><PenLine size={15} /> 서명 완료 및 확인</button>
+        <button className="mrs-btn mrs-btn-ghost" onClick={onCancel}>취소</button>
+      </div>
+    </div>
+  );
+}
 function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope }) {
   const [projectFilter, setProjectFilter] = useState('전체');
   const [zoneQuery, setZoneQuery] = useState('');
@@ -782,7 +1059,7 @@ function MaterialOutbound({ requests, projects, onUpdateStatus }) {
   const rows = [];
   requests.forEach(r => {
     r.items.forEach(it => {
-      if (it.status === '입고완료') return;
+      if (it.status !== '요청됨') return;
       rows.push({
         reqId: r.id, itemId: it.id, requester: r.requester, projectName: projectNameById[r.projectId] || '-',
         zone: r.zone, name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit, status: it.status, createdAt: r.createdAt,
@@ -794,7 +1071,7 @@ function MaterialOutbound({ requests, projects, onUpdateStatus }) {
   return (
     <div>
       {rows.length === 0 ? (
-        <div className="mrs-card mrs-empty">출고 대기 중인 요청이 없습니다.</div>
+        <div className="mrs-card mrs-empty">발주확인 대기 중인 요청이 없습니다.</div>
       ) : (
         <div className="mrs-table-wrap">
           <table className="mrs-table">
@@ -806,7 +1083,7 @@ function MaterialOutbound({ requests, projects, onUpdateStatus }) {
                   <td style={{ fontWeight: 600 }}>{r.name}</td><td style={{ color: 'var(--ink-soft)' }}>{r.spec}</td><td style={{ color: 'var(--ink-soft)' }}>{r.color}</td>
                   <td className="mrs-mono">{r.qty} {r.unit}</td>
                   <td><StatusBadge value={r.status} /></td>
-                  <td><button className="mrs-btn mrs-btn-primary" style={{ padding: '6px 10px', fontSize: 12 }} onClick={() => onUpdateStatus(r.reqId, r.itemId, '입고완료')}>출고 처리</button></td>
+                  <td><button className="mrs-btn mrs-btn-primary" style={{ padding: '6px 10px', fontSize: 12 }} onClick={() => onUpdateStatus(r.reqId, r.itemId, '확인됨')}>발주확인</button></td>
                 </tr>
               ))}
             </tbody>
@@ -883,17 +1160,60 @@ function MaterialBalance({ orders, requests }) {
   );
 }
 
+// ── 자재팀: 반출 대기 / 반출확인 ────────────────────────
+function MaterialReturns({ returns, onConfirmReturn, saving }) {
+  const [confirmingId, setConfirmingId] = useState(null);
+  const pending = returns.filter(r => r.status !== '반출확인완료').slice().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  async function handleConfirm(r, sig) {
+    await onConfirmReturn(r.id, sig);
+    setConfirmingId(null);
+  }
+
+  return (
+    <div>
+      {pending.length === 0 ? (
+        <div className="mrs-card mrs-empty">반출확인 대기 중인 요청이 없습니다.</div>
+      ) : pending.map(r => (
+        <div className="mrs-card" key={r.id} style={{ padding: 16, marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>{r.requester}</span>
+            <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{fmtDate(r.createdAt)}</span>
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>{r.floor} {r.zone}{r.reason ? ` · ${r.reason}` : ''}</div>
+          {r.items.map(it => (
+            <div key={it.id} style={{ fontSize: 13, padding: '3px 0' }}>{it.name} {it.spec} · {it.qty}{it.unit}</div>
+          ))}
+          {confirmingId !== r.id ? (
+            <button className="mrs-btn mrs-btn-primary" style={{ marginTop: 10 }} onClick={() => setConfirmingId(r.id)}><PenLine size={15} /> 반출확인</button>
+          ) : (
+            <ConfirmSignaturePanel
+              deliverLabel="인도자 (현장팀장)" receiveLabel="인수자 (자재팀)"
+              deliverNameDefault={r.requester}
+              onCancel={() => setConfirmingId(null)}
+              onSubmit={sig => handleConfirm(r, sig)}
+              saving={saving}
+            />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── 자재팀 전체 화면 ────────────────────────────────────
-function MaterialApp({ requests, projects, orders, onUpdateStatus, onDelete }) {
+function MaterialApp({ requests, projects, orders, returns, onUpdateStatus, onDelete, onConfirmReturn, savingSettings }) {
   const [tab, setTab] = useState('outbound');
   return (
     <div className="mrs-body">
       <div className="mrs-tabs" style={{ margin: '-20px -20px 20px', padding: '0 20px' }}>
-        <button className={`mrs-tab ${tab === 'outbound' ? 'active' : ''}`} onClick={() => setTab('outbound')}><ClipboardList size={16} /> 현장 출고 대기</button>
+        <button className={`mrs-tab ${tab === 'outbound' ? 'active' : ''}`} onClick={() => setTab('outbound')}><ClipboardList size={16} /> 발주확인 대기</button>
+        <button className={`mrs-tab ${tab === 'return' ? 'active' : ''}`} onClick={() => setTab('return')}><PackageMinus size={16} /> 반출확인 대기</button>
         <button className={`mrs-tab ${tab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}><LayoutDashboard size={16} /> 누계 요청리스트</button>
         <button className={`mrs-tab ${tab === 'balance' ? 'active' : ''}`} onClick={() => setTab('balance')}><CalendarDays size={16} /> 잔여물량 현황</button>
       </div>
       {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} />}
+      {tab === 'return' && <MaterialReturns returns={returns} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
       {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" />}
       {tab === 'balance' && <MaterialBalance orders={orders} requests={requests} />}
     </div>
@@ -910,6 +1230,7 @@ export default function App() {
   const [projects, setProjects] = useState(DEFAULT_PROJECTS);
   const [users, setUsers] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [returns, setReturns] = useState([]);
   const [dataLoading, setDataLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
@@ -932,13 +1253,14 @@ export default function App() {
   async function loadData(role) {
     setDataLoading(true); setError(null);
     try {
-      const calls = [apiGet('list'), apiGet('projects')];
+      const calls = [apiGet('list'), apiGet('projects'), apiGet('returns')];
       if (role === 'admin') calls.push(apiGet('users'));
       if (role === 'admin' || role === 'material') calls.push(apiGet('orders'));
       const results = await Promise.all(calls);
       setRequests(Array.isArray(results[0]) ? results[0] : []);
       setProjects(Array.isArray(results[1]) && results[1].length ? results[1] : DEFAULT_PROJECTS);
-      let idx = 2;
+      setReturns(Array.isArray(results[2]) ? results[2] : []);
+      let idx = 3;
       if (role === 'admin') { setUsers(Array.isArray(results[idx]) ? results[idx] : []); idx++; }
       if (role === 'admin' || role === 'material') { setOrders(Array.isArray(results[idx]) ? results[idx] : []); }
     } catch (e) {
@@ -964,6 +1286,42 @@ export default function App() {
     try { await apiPost('updateStatus', { itemId, status }); }
     catch (e) { setError('상태 변경에 실패했습니다.'); await loadData(session.role); }
     finally { setSaving(false); }
+  }
+
+  async function handleConfirmReceipt(reqId, sig) {
+    const data = { reqId, ...sig };
+    const next = requests.map(r => r.id !== reqId ? r : {
+      ...r, items: r.items.map(it => ({ ...it, status: '입고완료' })),
+      deliverName: sig.deliverName, deliverSignature: sig.deliverSignature,
+      receiveName: sig.receiveName, receiveSignature: sig.receiveSignature, confirmedAt: new Date().toISOString(),
+    });
+    setRequests(next);
+    setSaving(true); setError(null);
+    try { await apiPost('confirmReceipt', { data }); }
+    catch (e) { setError('입고확인에 실패했습니다.'); await loadData(session.role); }
+    finally { setSaving(false); }
+  }
+
+  async function handleSubmitReturn(payload) {
+    const next = [payload, ...returns].map(r => r.status ? r : { ...r, status: '반출요청' });
+    setReturns([{ ...payload, status: '반출요청' }, ...returns]);
+    setSaving(true); setError(null);
+    try { await apiPost('addReturn', { payload }); }
+    catch (e) { setError('반출요청 저장에 실패했습니다.'); await loadData(session.role); }
+    finally { setSaving(false); }
+  }
+
+  async function handleConfirmReturn(reqId, sig) {
+    const next = returns.map(r => r.id !== reqId ? r : {
+      ...r, status: '반출확인완료',
+      deliverName: sig.deliverName, deliverSignature: sig.deliverSignature,
+      receiveName: sig.receiveName, receiveSignature: sig.receiveSignature, confirmedAt: new Date().toISOString(),
+    });
+    setReturns(next);
+    setSavingSettings(true); setError(null);
+    try { await apiPost('confirmReturn', { data: { reqId, ...sig } }); }
+    catch (e) { setError('반출확인에 실패했습니다.'); await loadData(session.role); }
+    finally { setSavingSettings(false); }
   }
 
   async function handleDelete(reqId) {
@@ -1055,7 +1413,7 @@ export default function App() {
             {session.role === 'admin' ? '관리자' : session.role === 'material' ? '자재팀' : '팀장'}
           </span>
           <span className="mrs-user-chip">{session.name}</span>
-          <button className="mrs-logout-btn" onClick={() => { setSession(null); setRequests([]); setUsers([]); setOrders([]); }}><LogOut size={13} /> 로그아웃</button>
+          <button className="mrs-logout-btn" onClick={() => { setSession(null); setRequests([]); setUsers([]); setOrders([]); setReturns([]); }}><LogOut size={13} /> 로그아웃</button>
         </div>
       </div>
 
@@ -1075,11 +1433,10 @@ export default function App() {
           savingSettings={savingSettings}
         />
       ) : session.role === 'material' ? (
-        <MaterialApp requests={requests} projects={projects} orders={orders} onUpdateStatus={handleUpdateStatus} onDelete={handleDelete} />
+        <MaterialApp requests={requests} projects={projects} orders={orders} returns={returns} onUpdateStatus={handleUpdateStatus} onDelete={handleDelete} onConfirmReturn={handleConfirmReturn} savingSettings={savingSettings} />
       ) : (
-        <LeaderApp session={session} requests={requests} projects={projects} onSubmit={handleSubmit} saving={saving} />
+        <LeaderApp session={session} requests={requests} returns={returns} projects={projects} onSubmit={handleSubmit} onSubmitReturn={handleSubmitReturn} onConfirmReceipt={handleConfirmReceipt} saving={saving} />
       )}
     </div>
   );
 }
-
