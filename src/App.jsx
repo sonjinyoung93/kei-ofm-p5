@@ -333,7 +333,7 @@ function ItemRowEditor({ item, catalog, onChange, onRemove, removable }) {
       <div><select className="mrs-select" value={item.name} onChange={e => handleNameChange(e.target.value)}>{names.length === 0 ? <option value="">품목 없음</option> : names.map(n => <option key={n} value={n}>{n}</option>)}</select></div>
       <div><select className="mrs-select" value={item.spec} onChange={e => handleSpecChange(e.target.value)}>{specs.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
       <div><input className="mrs-input" type="number" min="0" value={item.qty} onChange={e => onChange({ ...item, qty: e.target.value })} placeholder="0" /></div>
-      <div><input className="mrs-input" value={item.unit} disabled /></div>
+      <div><select className="mrs-select" value={item.unit} onChange={e => onChange({ ...item, unit: e.target.value })}>{UNITS.map(u => <option key={u} value={u}>{u}</option>)}</select></div>
       <div><select className="mrs-select" value={item.color} onChange={e => handleColorChange(e.target.value)} disabled={colors.length <= 1}>{colors.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
       <button className="mrs-btn mrs-btn-danger" onClick={onRemove} disabled={!removable} title="삭제" style={{ padding: 8 }}><Trash2 size={16} /></button>
     </div>
@@ -397,11 +397,15 @@ function RequestForm({ session, projectName, catalog, zones, onSubmit, saving })
   function removeItem(id) { if (items.length === 1) return; setItems(items.filter(it => it.id !== id)); }
 
   async function handleSubmit() {
-    if (!floor || !room || !zone) { alert('구역을 모두 선택해주세요. 관리자에게 구역 등록을 요청하세요.'); return; }
+    // 드롭다운에는 첫 옵션이 표시되고 있지만 state가 아직 빈 경우가 있을 수 있어 실제 사용 값을 여기서 확정
+    const effFloor = floor || floors[0] || '';
+    const effRoom = room || rooms[0] || '';
+    const effZone = zone || zoneNames[0] || '';
+    if (!effFloor || !effRoom || !effZone) { alert('구역을 모두 선택해주세요. 관리자에게 구역 등록을 요청하세요.'); return; }
     if (catalog.length === 0) { alert('품목이 등록되어 있지 않습니다.'); return; }
     const valid = items.filter(it => it.name && it.qty !== '' && Number(it.qty) > 0);
     if (valid.length === 0) { alert('최소 1개 이상의 품목에 수량을 입력해주세요.'); return; }
-    const zoneName = `${floor} · ${room} · ${zone}`;
+    const zoneName = `${effFloor} · ${effRoom} · ${effZone}`;
     const payload = {
       id: genId(), reqNo: genReqNo(), requester: session.name, username: session.username,
       projectId: session.projectId, zoneName, process, note: note.trim(), createdAt: new Date().toISOString(),
@@ -586,11 +590,14 @@ function ReturnPanel({ session, projectName, catalog, zones, returns, onSubmit, 
   function removeItem(id) { if (items.length === 1) return; setItems(items.filter(it => it.id !== id)); }
 
   async function handleSubmit() {
-    if (!floor || !room || !zone) { alert('구역을 모두 선택해주세요.'); return; }
+    const effFloor = floor || floors[0] || '';
+    const effRoom = room || rooms[0] || '';
+    const effZone = zone || zoneNames[0] || '';
+    if (!effFloor || !effRoom || !effZone) { alert('구역을 모두 선택해주세요.'); return; }
     if (catalog.length === 0) { alert('품목이 등록되어 있지 않습니다.'); return; }
     const valid = items.filter(it => it.name && it.qty !== '' && Number(it.qty) > 0);
     if (valid.length === 0) { alert('최소 1개 이상의 품목에 수량을 입력해주세요.'); return; }
-    const zoneName = `${floor} · ${room} · ${zone}`;
+    const zoneName = `${effFloor} · ${effRoom} · ${effZone}`;
     const payload = {
       id: genId(), reqNo: genReqNo(), requester: session.name, username: session.username,
       projectId: session.projectId, zoneName, reason: reason.trim(), createdAt: new Date().toISOString(),
@@ -1134,18 +1141,18 @@ function CatalogManager({ catalog, onSave, saving }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 0.8fr 0.8fr auto', gap: 6, marginBottom: 4 }}>
             <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목명</span>
             <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span>
             <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>단위</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span>
             <span></span>
           </div>
           {draft.map((it, idx) => (
             <div key={it.id} style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 0.8fr 0.8fr auto', gap: 6, marginBottom: 6, alignItems: 'center' }}>
               <input className="mrs-input" value={it.name} onChange={e => update(idx, 'name', e.target.value)} placeholder="무나사전선관" />
               <input className="mrs-input" value={it.spec} onChange={e => update(idx, 'spec', e.target.value)} placeholder="E19" />
-              <input className="mrs-input" value={it.color} onChange={e => update(idx, 'color', e.target.value)} placeholder="N/A" />
               <select className="mrs-select" value={it.unit} onChange={e => update(idx, 'unit', e.target.value)}>
                 {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
               </select>
+              <input className="mrs-input" value={it.color} onChange={e => update(idx, 'color', e.target.value)} placeholder="N/A" />
               <button className="mrs-btn mrs-btn-danger" onClick={() => remove(idx)} style={{ padding: 8 }}><Trash2 size={15} /></button>
             </div>
           ))}
