@@ -5,6 +5,21 @@ import { NanumGothicBase64 } from './NanumGothicFont';
 import { Plus, Trash2, Download, ClipboardList, LayoutDashboard, Loader2, AlertCircle, CheckCircle2, X, Save, LogOut, Building2, Users, ListChecks, CalendarDays, Lock, PenLine, PackageMinus, RefreshCw, MapPin, Package } from 'lucide-react';
 
 const UNITS = ['EA', 'M', 'SET', 'BOX', 'ROLL', 'KG', '본', '롤'];
+
+// 품목명에 따라 허용 단위 제한 (부분 문자열 매칭)
+const ITEM_UNIT_MAP = [
+  { match: '무나사전선관', units: ['본', 'M'] },
+  { match: '커플링', units: ['EA', 'BOX'] },
+  { match: '박스커넥터', units: ['EA', 'BOX'] },
+  { match: '통신케이블', units: ['M', '롤'] },
+  { match: '내화케이블', units: ['M', '롤'] },
+];
+
+function unitsForItem(itemName) {
+  if (!itemName) return UNITS;
+  const rule = ITEM_UNIT_MAP.find(r => itemName.includes(r.match));
+  return rule ? rule.units : UNITS;
+}
 const PROCESSES = ['자탐', '유도등', '무통'];
 const STATUS_FLOW = ['요청됨', '확인됨', '입고완료'];
 const RETURN_STATUS_FLOW = ['반출요청', '반출확인완료'];
@@ -73,7 +88,9 @@ function newItemRow(catalog) {
   const name = catalogNames(catalog)[0];
   const spec = catalogSpecs(catalog, name)[0];
   const color = catalogColors(catalog, name, spec)[0];
-  const unit = catalogUnit(catalog, name, spec, color);
+  const catUnit = catalogUnit(catalog, name, spec, color);
+  const allowed = unitsForItem(name);
+  const unit = allowed.includes(catUnit) ? catUnit : allowed[0];
   return { id: genId(), name, spec, color, qty: '', unit };
 }
 
@@ -315,16 +332,22 @@ function ItemRowEditor({ item, catalog, onChange, onRemove, removable }) {
   function handleNameChange(name) {
     const spec = catalogSpecs(catalog, name)[0] || '';
     const color = catalogColors(catalog, name, spec)[0] || 'N/A';
-    const unit = catalogUnit(catalog, name, spec, color);
+    const catUnit = catalogUnit(catalog, name, spec, color);
+    const allowed = unitsForItem(name);
+    const unit = allowed.includes(catUnit) ? catUnit : allowed[0];
     onChange({ ...item, name, spec, color, unit });
   }
   function handleSpecChange(spec) {
     const color = catalogColors(catalog, item.name, spec)[0] || 'N/A';
-    const unit = catalogUnit(catalog, item.name, spec, color);
+    const catUnit = catalogUnit(catalog, item.name, spec, color);
+    const allowed = unitsForItem(item.name);
+    const unit = allowed.includes(catUnit) ? catUnit : allowed[0];
     onChange({ ...item, spec, color, unit });
   }
   function handleColorChange(color) {
-    const unit = catalogUnit(catalog, item.name, item.spec, color);
+    const catUnit = catalogUnit(catalog, item.name, item.spec, color);
+    const allowed = unitsForItem(item.name);
+    const unit = allowed.includes(catUnit) ? catUnit : allowed[0];
     onChange({ ...item, color, unit });
   }
 
@@ -333,7 +356,7 @@ function ItemRowEditor({ item, catalog, onChange, onRemove, removable }) {
       <div><select className="mrs-select" value={item.name} onChange={e => handleNameChange(e.target.value)}>{names.length === 0 ? <option value="">품목 없음</option> : names.map(n => <option key={n} value={n}>{n}</option>)}</select></div>
       <div><select className="mrs-select" value={item.spec} onChange={e => handleSpecChange(e.target.value)}>{specs.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
       <div><input className="mrs-input" type="number" min="0" value={item.qty} onChange={e => onChange({ ...item, qty: e.target.value })} placeholder="0" /></div>
-      <div><select className="mrs-select" value={item.unit} onChange={e => onChange({ ...item, unit: e.target.value })}>{UNITS.map(u => <option key={u} value={u}>{u}</option>)}</select></div>
+      <div><select className="mrs-select" value={item.unit} onChange={e => onChange({ ...item, unit: e.target.value })}>{unitsForItem(item.name).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
       <div><select className="mrs-select" value={item.color} onChange={e => handleColorChange(e.target.value)} disabled={colors.length <= 1}>{colors.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
       <button className="mrs-btn mrs-btn-danger" onClick={onRemove} disabled={!removable} title="삭제" style={{ padding: 8 }}><Trash2 size={16} /></button>
     </div>
@@ -1376,7 +1399,7 @@ function MaterialReturns({ returns, onConfirmReturn, saving }) {
   );
 }
 
-function MaterialApp({ requests, projects, returns, onUpdateStatus, onDelete, onConfirmReturn, savingSettings }) {
+function MaterialApp({ requests, projects, returns, onUpdateStatus, onConfirmReturn, savingSettings }) {
   const [tab, setTab] = useState('outbound');
   return (
     <div className="mrs-body">
@@ -1387,7 +1410,7 @@ function MaterialApp({ requests, projects, returns, onUpdateStatus, onDelete, on
         <button className={`mrs-tab ${tab === 'returns' ? 'active' : ''}`} onClick={() => setTab('returns')}><CalendarDays size={16} /> 누계 반출리스트</button>
       </div>
       {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} />}
-      {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" allowPdf />}
+      {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} scope="all" allowPdf />}
       {tab === 'return' && <MaterialReturns returns={returns} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
       {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} />}
     </div>
@@ -1619,7 +1642,7 @@ export default function App() {
           savingSettings={savingSettings}
         />
       ) : session.role === 'material' ? (
-        <MaterialApp requests={requests} projects={projects} returns={returns} onUpdateStatus={handleUpdateStatus} onDelete={handleDelete} onConfirmReturn={handleConfirmReturn} savingSettings={savingSettings} />
+        <MaterialApp requests={requests} projects={projects} returns={returns} onUpdateStatus={handleUpdateStatus} onConfirmReturn={handleConfirmReturn} savingSettings={savingSettings} />
       ) : (
         <LeaderApp session={session} requests={requests} returns={returns} projects={projects} catalog={catalog} zones={zones} onSubmit={handleSubmit} onSubmitReturn={handleSubmitReturn} onConfirmReceipt={handleConfirmReceipt} onDeleteRequest={handleDelete} saving={saving} />
       )}
