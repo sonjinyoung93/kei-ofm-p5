@@ -755,7 +755,7 @@ function LeaderApp({ session, requests, returns, projects, catalog, zones, onSub
 }
 
 // ── 누계요청리스트 (관리자/자재팀 공용) ─────────────────────
-function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, allowPdf }) {
+function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, allowPdf, role }) {
   const [projectFilter, setProjectFilter] = useState('전체');
   const [zoneQuery, setZoneQuery] = useState('');
   const [processFilter, setProcessFilter] = useState('전체');
@@ -868,7 +868,7 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, al
                   <td style={{ fontWeight: 600 }}>{r.name}</td><td style={{ color: 'var(--ink-soft)' }}>{r.spec || '-'}</td>
                   <td style={{ color: 'var(--ink-soft)' }}>{r.color || '-'}</td>
                   <td className="mrs-mono">{r.qty} {r.unit}</td>
-                  <td><StatusSelect value={r.status} options={STATUS_FLOW} onChange={v => onUpdateStatus(r.reqId, r.itemId, v)} /></td>
+                  <td>{role === 'material' ? <StatusBadge value={r.status} /> : <StatusSelect value={r.status} options={STATUS_FLOW} onChange={v => onUpdateStatus(r.reqId, r.itemId, v)} />}</td>
                   <td>
                     {allowPdf && r.status === '입고완료' && (
                       <button className="mrs-btn mrs-btn-ghost" style={{ padding: '4px 8px', fontSize: 12 }} onClick={() => downloadPdf(r.req)} title="거래명세표"><Download size={13} /></button>
@@ -1186,6 +1186,186 @@ function CatalogManager({ catalog, onSave, saving }) {
   );
 }
 
+// ── 관리 설정: 보유물량 (프로젝트+품목+규격+색상 + 엑셀 업로드) ──
+function StockManager({ stock, projects, onSave, saving }) {
+  const [draft, setDraft] = useState(stock);
+  const fileRef = useRef(null);
+  useEffect(() => setDraft(stock), [stock]);
+
+  function addRow() { setDraft([...draft, { id: genId('stock'), projectId: projects[0]?.id || '', itemName: '', itemSpec: '', itemColor: 'N/A', qty: 0, unit: 'EA' }]); }
+  function remove(idx) { setDraft(draft.filter((_, i) => i !== idx)); }
+  function update(idx, field, val) { const next = [...draft]; next[idx] = { ...next[idx], [field]: val }; setDraft(next); }
+
+  function downloadTemplate() {
+    const rows = [
+      { '프로젝트명': 'P5 Ph1 (삼성물산)', '품목명': '무나사전선관', '규격': 'E19', '색상': 'N/A', '단위': '본', '수량': 500 },
+      { '프로젝트명': 'P5 Ph1 (삼성물산)', '품목명': '통신케이블', '규격': '14TP', '색상': '적', '단위': '롤', '수량': 10 },
+    ];
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 10 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '보유물량');
+    XLSX.writeFile(wb, '보유물량_업로드_양식.xlsx');
+  }
+
+  function handleUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws);
+        const projectByName = {};
+        projects.forEach(p => { projectByName[p.name] = p.id; });
+        const parsed = rows.map(row => ({
+          id: genId('stock'),
+          projectId: projectByName[String(row['프로젝트명'] || row['프로젝트'] || '').trim()] || projects[0]?.id || '',
+          itemName: String(row['품목명'] || row['품목'] || '').trim(),
+          itemSpec: String(row['규격'] || '').trim(),
+          itemColor: String(row['색상'] || 'N/A').trim() || 'N/A',
+          unit: String(row['단위'] || 'EA').trim() || 'EA',
+          qty: Number(row['수량'] || row['보유물량'] || 0) || 0,
+        })).filter(it => it.itemName && it.itemSpec);
+        if (parsed.length === 0) { alert('업로드할 데이터가 없습니다.'); return; }
+        if (confirm(`${parsed.length}건의 보유물량을 추가할까요? (기존 항목은 유지됩니다)`)) {
+          setDraft([...draft, ...parsed]);
+        }
+      } catch (err) { alert('엑셀 읽기 실패: ' + err.message); }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = '';
+  }
+
+  return (
+    <div className="mrs-card" style={{ padding: 18, marginBottom: 20 }}>
+      <h3 className="mrs-display" style={{ fontSize: 15, margin: '0 0 12px', fontWeight: 600 }}><Package size={15} style={{ verticalAlign: -2 }} /> 보유물량 관리</h3>
+      <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 10 }}>프로젝트별 품목/규격/색상 단위로 초기 보유물량을 등록합니다. 재고 = 보유물량 − 팀장 입고확인 수량.</div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <button className="mrs-btn mrs-btn-ghost" onClick={addRow}><Plus size={15} /> 항목 추가</button>
+        <button className="mrs-btn mrs-btn-primary" onClick={() => fileRef.current?.click()}><Download size={15} style={{ transform: 'rotate(180deg)' }} /> 엑셀 업로드</button>
+        <button className="mrs-btn mrs-btn-ghost" onClick={downloadTemplate}><Download size={15} /> 양식 다운로드</button>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleUpload} />
+      </div>
+
+      {draft.length === 0 ? (
+        <div style={{ fontSize: 13, color: 'var(--ink-soft)', padding: '10px 0' }}>등록된 보유물량이 없습니다.</div>
+      ) : (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.3fr 1fr 0.8fr 0.8fr 0.8fr auto', gap: 6, marginBottom: 4 }}>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>프로젝트</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목명</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>단위</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>수량</span>
+            <span></span>
+          </div>
+          {draft.map((it, idx) => (
+            <div key={it.id} style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.3fr 1fr 0.8fr 0.8fr 0.8fr auto', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+              <select className="mrs-select" value={it.projectId} onChange={e => update(idx, 'projectId', e.target.value)}>
+                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <input className="mrs-input" value={it.itemName} onChange={e => update(idx, 'itemName', e.target.value)} placeholder="무나사전선관" />
+              <input className="mrs-input" value={it.itemSpec} onChange={e => update(idx, 'itemSpec', e.target.value)} placeholder="E19" />
+              <input className="mrs-input" value={it.itemColor} onChange={e => update(idx, 'itemColor', e.target.value)} placeholder="N/A" />
+              <select className="mrs-select" value={it.unit} onChange={e => update(idx, 'unit', e.target.value)}>
+                {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
+              <input className="mrs-input" type="number" min="0" value={it.qty} onChange={e => update(idx, 'qty', e.target.value)} />
+              <button className="mrs-btn mrs-btn-danger" onClick={() => remove(idx)} style={{ padding: 8 }}><Trash2 size={15} /></button>
+            </div>
+          ))}
+        </>
+      )}
+      <button className="mrs-btn mrs-btn-primary" style={{ marginTop: 10 }} disabled={saving || draft.some(it => !it.itemName?.trim() || !it.itemSpec?.trim() || !it.projectId)} onClick={() => onSave(draft)}><Save size={15} /> 전체 저장</button>
+    </div>
+  );
+}
+
+// ── 재고 현황 뷰 (자재팀/관리자) ────────────────────────
+function StockView({ stock, requests, projects }) {
+  const [projectFilter, setProjectFilter] = useState('전체');
+  const projectNameById = {};
+  projects.forEach(p => { projectNameById[p.id] = p.name; });
+
+  // 팀장이 입고확인(서명)한 = '입고완료' + confirmedAt이 있는 요청의 품목만 합산
+  const deliveredMap = {};
+  requests.forEach(r => {
+    if (!r.confirmedAt) return;
+    r.items.forEach(it => {
+      if (it.status !== '입고완료') return;
+      const key = `${r.projectId}|${it.name}|${it.spec}|${it.color || 'N/A'}`;
+      deliveredMap[key] = (deliveredMap[key] || 0) + (Number(it.qty) || 0);
+    });
+  });
+
+  const rows = stock.map(s => {
+    const key = `${s.projectId}|${s.itemName}|${s.itemSpec}|${s.itemColor || 'N/A'}`;
+    const delivered = deliveredMap[key] || 0;
+    const remain = (Number(s.qty) || 0) - delivered;
+    return {
+      id: s.id, projectId: s.projectId, projectName: projectNameById[s.projectId] || '-',
+      itemName: s.itemName, itemSpec: s.itemSpec, itemColor: s.itemColor, unit: s.unit,
+      stockQty: Number(s.qty) || 0, deliveredQty: delivered, remain,
+    };
+  });
+
+  const filtered = rows.filter(r => projectFilter === '전체' || r.projectId === projectFilter)
+    .sort((a, b) => a.projectName.localeCompare(b.projectName) || a.itemName.localeCompare(b.itemName));
+
+  function exportExcel() {
+    const data = filtered.map(r => ({
+      '프로젝트': r.projectName, '품목명': r.itemName, '규격': r.itemSpec, '색상': r.itemColor,
+      '보유물량': r.stockQty, '입고완료': r.deliveredQty, '재고물량': r.remain, '단위': r.unit,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws['!cols'] = [{wch:20},{wch:16},{wch:12},{wch:8},{wch:10},{wch:10},{wch:10},{wch:8}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '재고현황');
+    const d = new Date();
+    XLSX.writeFile(wb, `재고현황_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}.xlsx`);
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+        <select className="mrs-select" style={{ width: 'auto', fontWeight: 600 }} value={projectFilter} onChange={e => setProjectFilter(e.target.value)}>
+          <option value="전체">전체 프로젝트</option>
+          {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        <div style={{ flex: 1 }} />
+        <button className="mrs-btn mrs-btn-primary" onClick={exportExcel} disabled={filtered.length === 0}><Download size={15} /> 엑셀로 내보내기</button>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="mrs-card mrs-empty">등록된 보유물량이 없습니다. 관리자 → 관리 설정에서 등록하세요.</div>
+      ) : (
+        <div className="mrs-table-wrap">
+          <table className="mrs-table">
+            <thead><tr><th>프로젝트</th><th>품목</th><th>규격</th><th>색상</th><th>보유물량</th><th>입고완료</th><th>재고물량</th><th>단위</th></tr></thead>
+            <tbody>
+              {filtered.map(r => (
+                <tr key={r.id}>
+                  <td style={{ fontWeight: 600 }}>{r.projectName}</td>
+                  <td style={{ fontWeight: 600 }}>{r.itemName}</td>
+                  <td style={{ color: 'var(--ink-soft)' }}>{r.itemSpec}</td>
+                  <td style={{ color: 'var(--ink-soft)' }}>{r.itemColor}</td>
+                  <td className="mrs-mono">{r.stockQty}</td>
+                  <td className="mrs-mono" style={{ color: '#2B5A8C' }}>{r.deliveredQty}</td>
+                  <td className="mrs-mono" style={{ color: r.remain < 0 ? '#B84B10' : '#2E6B47', fontWeight: 600 }}>{r.remain}</td>
+                  <td>{r.unit}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── 관리 설정: 팀장/자재팀 계정 ─────────────────────────
 function StaffManager({ users, projects, onAdd, onUpdate, onDelete, saving }) {
   const staff = users.filter(u => u.role === 'leader' || u.role === 'material');
@@ -1290,7 +1470,7 @@ function AdminAccountManager({ session, onUpdate, saving }) {
 }
 
 // ── 관리자 전체 화면 (자재팀과 동일한 구성 + 관리 설정) ───
-function AdminApp({ session, requests, returns, projects, users, zones, catalog, onUpdateStatus, onDelete, onSaveProjects, onSaveZones, onSaveCatalog, onAddUser, onUpdateUser, onDeleteUser, onConfirmReturn, savingSettings }) {
+function AdminApp({ session, requests, returns, projects, users, zones, catalog, stock, onUpdateStatus, onDelete, onSaveProjects, onSaveZones, onSaveCatalog, onSaveStock, onAddUser, onUpdateUser, onDeleteUser, onConfirmReturn, savingSettings }) {
   const [tab, setTab] = useState('outbound');
   return (
     <div className="mrs-body">
@@ -1299,6 +1479,7 @@ function AdminApp({ session, requests, returns, projects, users, zones, catalog,
         <button className={`mrs-tab ${tab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}><LayoutDashboard size={16} /> 누계 요청리스트</button>
         <button className={`mrs-tab ${tab === 'return' ? 'active' : ''}`} onClick={() => setTab('return')}><PackageMinus size={16} /> 반출확인 대기</button>
         <button className={`mrs-tab ${tab === 'returns' ? 'active' : ''}`} onClick={() => setTab('returns')}><CalendarDays size={16} /> 누계 반출리스트</button>
+        <button className={`mrs-tab ${tab === 'stock' ? 'active' : ''}`} onClick={() => setTab('stock')}><Package size={16} /> 재고 현황</button>
         <button className={`mrs-tab ${tab === 'manage' ? 'active' : ''}`} onClick={() => setTab('manage')}><Users size={16} /> 관리 설정</button>
       </div>
 
@@ -1306,11 +1487,13 @@ function AdminApp({ session, requests, returns, projects, users, zones, catalog,
       {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" allowPdf />}
       {tab === 'return' && <MaterialReturns returns={returns} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
       {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} />}
+      {tab === 'stock' && <StockView stock={stock} requests={requests} projects={projects} />}
       {tab === 'manage' && (
         <div>
           <ProjectManager projects={projects} onSave={onSaveProjects} saving={savingSettings} />
           <ZoneManager zones={zones} projects={projects} onSave={onSaveZones} saving={savingSettings} />
           <CatalogManager catalog={catalog} onSave={onSaveCatalog} saving={savingSettings} />
+          <StockManager stock={stock} projects={projects} onSave={onSaveStock} saving={savingSettings} />
           <StaffManager users={users} projects={projects} onAdd={onAddUser} onUpdate={onUpdateUser} onDelete={onDeleteUser} saving={savingSettings} />
           <AdminAccountManager session={session} onUpdate={onUpdateUser} saving={savingSettings} />
         </div>
@@ -1323,39 +1506,43 @@ function AdminApp({ session, requests, returns, projects, users, zones, catalog,
 function MaterialOutbound({ requests, projects, onUpdateStatus }) {
   const projectNameById = {};
   projects.forEach(p => { projectNameById[p.id] = p.name; });
-  const rows = [];
-  requests.forEach(r => {
-    r.items.forEach(it => {
-      if (it.status !== '요청됨') return;
-      rows.push({
-        reqId: r.id, itemId: it.id, requester: r.requester, projectName: projectNameById[r.projectId] || '-',
-        zoneName: r.zoneName || '', name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit, status: it.status, createdAt: r.createdAt,
-      });
-    });
-  });
-  rows.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  // 요청 단위로 그룹핑 (모든 품목이 '요청됨'인 요청만)
+  const pending = requests
+    .filter(r => r.items.length > 0 && r.items.every(it => it.status === '요청됨'))
+    .slice()
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  async function confirmAll(r) {
+    // 요청의 모든 품목을 '확인됨'으로 일괄 변경
+    for (const it of r.items) {
+      await onUpdateStatus(r.id, it.id, '확인됨');
+    }
+  }
+
   return (
     <div>
-      {rows.length === 0 ? (
+      {pending.length === 0 ? (
         <div className="mrs-card mrs-empty">발주확인 대기 중인 요청이 없습니다.</div>
-      ) : (
-        <div className="mrs-table-wrap">
-          <table className="mrs-table">
-            <thead><tr><th>요청자</th><th>프로젝트</th><th>구역</th><th>품목</th><th>규격</th><th>색상</th><th>수량</th><th>상태</th><th></th></tr></thead>
-            <tbody>
-              {rows.map(r => (
-                <tr key={r.itemId}>
-                  <td>{r.requester}</td><td>{r.projectName}</td><td>{r.zoneName}</td>
-                  <td style={{ fontWeight: 600 }}>{r.name}</td><td style={{ color: 'var(--ink-soft)' }}>{r.spec}</td><td style={{ color: 'var(--ink-soft)' }}>{r.color}</td>
-                  <td className="mrs-mono">{r.qty} {r.unit}</td>
-                  <td><StatusBadge value={r.status} /></td>
-                  <td><button className="mrs-btn mrs-btn-primary" style={{ padding: '6px 10px', fontSize: 12 }} onClick={() => onUpdateStatus(r.reqId, r.itemId, '확인됨')}>발주확인</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      ) : pending.map(r => (
+        <div className="mrs-card" key={r.id} style={{ padding: 16, marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap', gap: 6 }}>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>{r.requester}</span>
+            <StatusBadge value="요청됨" />
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 10 }}>
+            {projectNameById[r.projectId] || '-'} · {r.zoneName || '-'} · {fmtDate(r.createdAt)}
+          </div>
+          {r.items.map(it => (
+            <div key={it.id} style={{ fontSize: 13, padding: '5px 0', borderTop: '1px dashed var(--paper-line)' }}>
+              <b>{it.name}</b> {it.spec}{it.color && it.color !== 'N/A' ? ` ${it.color}` : ''} · {it.qty}{it.unit}
+            </div>
+          ))}
+          <button className="mrs-btn mrs-btn-primary" style={{ width: '100%', marginTop: 12, justifyContent: 'center' }} onClick={() => confirmAll(r)}>
+            <CheckCircle2 size={15} /> 발주확인 (전체 품목)
+          </button>
         </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -1399,7 +1586,7 @@ function MaterialReturns({ returns, onConfirmReturn, saving }) {
   );
 }
 
-function MaterialApp({ requests, projects, returns, onUpdateStatus, onConfirmReturn, savingSettings }) {
+function MaterialApp({ requests, projects, returns, stock, onUpdateStatus, onConfirmReturn, savingSettings }) {
   const [tab, setTab] = useState('outbound');
   return (
     <div className="mrs-body">
@@ -1408,11 +1595,13 @@ function MaterialApp({ requests, projects, returns, onUpdateStatus, onConfirmRet
         <button className={`mrs-tab ${tab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}><LayoutDashboard size={16} /> 누계 요청리스트</button>
         <button className={`mrs-tab ${tab === 'return' ? 'active' : ''}`} onClick={() => setTab('return')}><PackageMinus size={16} /> 반출확인 대기</button>
         <button className={`mrs-tab ${tab === 'returns' ? 'active' : ''}`} onClick={() => setTab('returns')}><CalendarDays size={16} /> 누계 반출리스트</button>
+        <button className={`mrs-tab ${tab === 'stock' ? 'active' : ''}`} onClick={() => setTab('stock')}><Package size={16} /> 재고 현황</button>
       </div>
       {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} />}
-      {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} scope="all" allowPdf />}
+      {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} scope="all" allowPdf role="material" />}
       {tab === 'return' && <MaterialReturns returns={returns} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
       {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} />}
+      {tab === 'stock' && <StockView stock={stock} requests={requests} projects={projects} />}
     </div>
   );
 }
@@ -1429,6 +1618,7 @@ export default function App() {
   const [users, setUsers] = useState([]);
   const [zones, setZones] = useState([]);
   const [catalog, setCatalog] = useState([]);
+  const [stock, setStock] = useState([]);
   const [dataLoading, setDataLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
@@ -1452,6 +1642,7 @@ export default function App() {
     setDataLoading(true); setError(null);
     try {
       const calls = [apiGet('list'), apiGet('projects'), apiGet('returns'), apiGet('zones'), apiGet('catalog')];
+      if (role === 'admin' || role === 'material') calls.push(apiGet('stock'));
       if (role === 'admin') calls.push(apiGet('users'));
       const results = await Promise.all(calls);
       setRequests(Array.isArray(results[0]) ? results[0] : []);
@@ -1459,7 +1650,9 @@ export default function App() {
       setReturns(Array.isArray(results[2]) ? results[2] : []);
       setZones(Array.isArray(results[3]) ? results[3] : []);
       setCatalog(Array.isArray(results[4]) ? results[4] : []);
-      if (role === 'admin') setUsers(Array.isArray(results[5]) ? results[5] : []);
+      let idx = 5;
+      if (role === 'admin' || role === 'material') { setStock(Array.isArray(results[idx]) ? results[idx] : []); idx++; }
+      if (role === 'admin') setUsers(Array.isArray(results[idx]) ? results[idx] : []);
     } catch (e) {
       setError('데이터를 불러오지 못했습니다. 네트워크를 확인해주세요.');
     } finally {
@@ -1565,6 +1758,13 @@ export default function App() {
     finally { setSavingSettings(false); }
   }
 
+  async function handleSaveStock(next) {
+    setSavingSettings(true); setError(null);
+    try { await apiPost('saveStock', { items: next }); setStock(next); }
+    catch (e) { setError('보유물량 저장에 실패했습니다.'); }
+    finally { setSavingSettings(false); }
+  }
+
   async function handleAddUser(user) {
     setSavingSettings(true); setError(null);
     try {
@@ -1621,7 +1821,7 @@ export default function App() {
           <button className="mrs-refresh-btn" onClick={handleRefresh} disabled={dataLoading} title="새로고침">
             <RefreshCw size={13} className={dataLoading ? 'mrs-spin' : ''} /> 새로고침
           </button>
-          <button className="mrs-logout-btn" onClick={() => { setSession(null); setRequests([]); setReturns([]); setUsers([]); setZones([]); setCatalog([]); }}><LogOut size={13} /> 로그아웃</button>
+          <button className="mrs-logout-btn" onClick={() => { setSession(null); setRequests([]); setReturns([]); setUsers([]); setZones([]); setCatalog([]); setStock([]); }}><LogOut size={13} /> 로그아웃</button>
         </div>
       </div>
 
@@ -1635,14 +1835,14 @@ export default function App() {
         <div className="mrs-empty"><Loader2 size={20} className="mrs-spin" /><div style={{ marginTop: 8 }}>불러오는 중...</div></div>
       ) : session.role === 'admin' ? (
         <AdminApp
-          session={session} requests={requests} returns={returns} projects={projects} users={users} zones={zones} catalog={catalog}
+          session={session} requests={requests} returns={returns} projects={projects} users={users} zones={zones} catalog={catalog} stock={stock}
           onUpdateStatus={handleUpdateStatus} onDelete={handleDeleteWithPassword} onConfirmReturn={handleConfirmReturn}
-          onSaveProjects={handleSaveProjects} onSaveZones={handleSaveZones} onSaveCatalog={handleSaveCatalog}
+          onSaveProjects={handleSaveProjects} onSaveZones={handleSaveZones} onSaveCatalog={handleSaveCatalog} onSaveStock={handleSaveStock}
           onAddUser={handleAddUser} onUpdateUser={handleUpdateUser} onDeleteUser={handleDeleteUser}
           savingSettings={savingSettings}
         />
       ) : session.role === 'material' ? (
-        <MaterialApp requests={requests} projects={projects} returns={returns} onUpdateStatus={handleUpdateStatus} onConfirmReturn={handleConfirmReturn} savingSettings={savingSettings} />
+        <MaterialApp requests={requests} projects={projects} returns={returns} stock={stock} onUpdateStatus={handleUpdateStatus} onConfirmReturn={handleConfirmReturn} savingSettings={savingSettings} />
       ) : (
         <LeaderApp session={session} requests={requests} returns={returns} projects={projects} catalog={catalog} zones={zones} onSubmit={handleSubmit} onSubmitReturn={handleSubmitReturn} onConfirmReceipt={handleConfirmReceipt} onDeleteRequest={handleDelete} saving={saving} />
       )}
