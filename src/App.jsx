@@ -20,7 +20,6 @@ function unitsForItem(itemName) {
   const rule = ITEM_UNIT_MAP.find(r => itemName.includes(r.match));
   return rule ? rule.units : UNITS;
 }
-const PROCESSES = ['자탐', '유도등', '무통'];
 const STATUS_FLOW = ['요청됨', '확인됨', '입고완료'];
 const RETURN_STATUS_FLOW = ['반출요청', '반출확인완료'];
 const STATUS_COLOR = {
@@ -73,6 +72,59 @@ function isToday(iso) {
   const d = new Date(iso);
   const now = new Date();
   return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+}
+
+// 낱개 총량을 대단위/중단위로 분해해 문자열로 표시
+// 예: 무나사전선관 4698M → "10타 35본" / 통신케이블 1648M → "5롤 148M"
+function formatStockByUnit(catItem, baseQty) {
+  const q = Number(baseQty) || 0;
+  if (!catItem) return `${q.toLocaleString()}`;
+  const f1 = Number(catItem.factor1) || 0;
+  const f2 = Number(catItem.factor2) || 0;
+  const hasMid = catItem.midUnit && f2 > 0;
+  const hasBig = catItem.bigUnit && f1 > 0;
+  const baseUnit = catItem.unit || 'EA';
+
+  if (hasMid) {
+    // 낱개 → 중 → 대  (예: M → 본 → 타)
+    const perBig = f1 * f2;              // 1대 = f1*f2 낱개
+    const bigCnt = Math.floor(q / perBig);
+    const restAfterBig = q - bigCnt * perBig;
+    const midCnt = Math.floor(restAfterBig / f2);
+    const smallRest = +(restAfterBig - midCnt * f2).toFixed(2);
+    const parts = [];
+    if (bigCnt > 0) parts.push(`${bigCnt}${catItem.bigUnit}`);
+    if (midCnt > 0) parts.push(`${midCnt}${catItem.midUnit}`);
+    if (smallRest > 0 || parts.length === 0) parts.push(`${smallRest}${baseUnit}`);
+    return parts.join(' ');
+  }
+  if (hasBig) {
+    // 낱개 → 대 (예: M → 롤, EA → BOX)
+    const bigCnt = Math.floor(q / f1);
+    const smallRest = +(q - bigCnt * f1).toFixed(2);
+    const parts = [];
+    if (bigCnt > 0) parts.push(`${bigCnt}${catItem.bigUnit}`);
+    if (smallRest > 0 || parts.length === 0) parts.push(`${smallRest}${baseUnit}`);
+    return parts.join(' ');
+  }
+  return `${q.toLocaleString()}${baseUnit}`;
+}
+
+// 특정 프로젝트+품목+규격+색상의 현재 재고(낱개) 계산: 보유물량 − 입고완료
+function computeStockRemain(stock, requests, projectId, name, spec, color) {
+  const stockItem = stock.find(s => s.projectId === projectId && s.itemName === name && s.itemSpec === spec && (s.itemColor || 'N/A') === (color || 'N/A'));
+  if (!stockItem) return null; // 보유물량 미등록
+  let delivered = 0;
+  requests.forEach(r => {
+    if (r.projectId !== projectId || !r.confirmedAt) return;
+    r.items.forEach(it => {
+      if (it.status !== '입고완료') return;
+      if (it.name === name && it.spec === spec && (it.color || 'N/A') === (color || 'N/A')) {
+        delivered += Number(it.qty) || 0;
+      }
+    });
+  });
+  return (Number(stockItem.qty) || 0) - delivered;
 }
 
 // ── 카탈로그 유틸 ─────────────────────────────────────────
@@ -308,8 +360,8 @@ function generateDocPdf({ title, docNo, dateStr, projectName, zoneStr, items, de
   doc.text(`일자: ${dateStr}`, 14, y);
   doc.text(`프로젝트: ${projectName || '-'}`, pw - 14, y, { align: 'right' });
   y += 6;
-  doc.text(`구역: ${zoneStr || '-'}`, 14, y);
-  y += 8;
+  if (zoneStr) { doc.text(`구역: ${zoneStr}`, 14, y); y += 8; }
+  else { y += 2; }
 
   doc.setDrawColor(200);
   doc.line(14, y, pw - 14, y);
@@ -349,7 +401,7 @@ function generateDocPdf({ title, docNo, dateStr, projectName, zoneStr, items, de
 }
 
 // ── 품목 행 편집기 (카탈로그 기반) ────────────────────────
-function ItemRowEditor({ item, catalog, onChange, onRemove, removable }) {
+function ItemRowEditor({ item, catalog, onChange, onRemove, removable, stockRemain }) {
   const names = catalogNames(catalog);
   const specs = catalogSpecs(catalog, item.name);
   const colors = catalogColors(catalog, item.name, item.spec);
@@ -358,6 +410,10 @@ function ItemRowEditor({ item, catalog, onChange, onRemove, removable }) {
   const hasMid = cat && cat.midUnit && (Number(cat.factor2) || 0) > 0;
   const hasBig = cat && cat.bigUnit && (Number(cat.factor1) || 0) > 0;
   const baseUnit = cat ? cat.unit : (item.unit || 'EA');
+
+  const reqQty = Number(item.qty) || 0;
+  const hasStock = stockRemain !== null && stockRemain !== undefined;
+  const overStock = hasStock && reqQty > stockRemain;
 
   function recalc(next) {
     const c = findCatalogItem(catalog, next.name, next.spec, next.color);
@@ -384,6 +440,16 @@ function ItemRowEditor({ item, catalog, onChange, onRemove, removable }) {
         <button className="mrs-btn mrs-btn-danger" onClick={onRemove} disabled={!removable} title="삭제" style={{ padding: 8 }}><Trash2 size={16} /></button>
       </div>
 
+      {hasStock && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+          <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 8, textAlign: 'right', lineHeight: 1.4,
+            background: overStock ? '#FBE7DA' : '#E1EBE3', color: overStock ? '#B84B10' : '#2E6B47' }}>
+            재고 {formatStockByUnit(cat, stockRemain)}
+            {(hasBig || hasMid) && <span style={{ fontSize: 10, opacity: 0.75 }}> ({stockRemain.toLocaleString()} {baseUnit})</span>}
+          </span>
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         {hasBig && (
           <div style={{ width: 80 }}>
@@ -403,9 +469,14 @@ function ItemRowEditor({ item, catalog, onChange, onRemove, removable }) {
         </div>
         <div style={{ flex: 1, textAlign: 'right', minWidth: 90 }}>
           <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>= 총 {baseUnit}</span>
-          <div className="mrs-mono" style={{ fontSize: 18, fontWeight: 700, color: 'var(--accent)' }}>{(Number(item.qty) || 0).toLocaleString()}</div>
+          <div className="mrs-mono" style={{ fontSize: 18, fontWeight: 700, color: 'var(--accent)' }}>{reqQty.toLocaleString()}</div>
         </div>
       </div>
+      {overStock && (
+        <div style={{ fontSize: 11, color: '#B84B10', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+          <AlertCircle size={13} /> 요청량({reqQty.toLocaleString()})이 재고({stockRemain.toLocaleString()})를 초과합니다
+        </div>
+      )}
       {(hasBig || hasMid) && (
         <div style={{ fontSize: 10, color: 'var(--ink-soft)', marginTop: 4 }}>
           {hasMid ? `1${cat.bigUnit} = ${cat.factor1}${cat.midUnit}, 1${cat.midUnit} = ${cat.factor2}${baseUnit}` : hasBig ? `1${cat.bigUnit} = ${cat.factor1}${baseUnit}` : ''}
@@ -448,23 +519,11 @@ function LoginScreen({ onLogin, loading, error }) {
 }
 
 // ── 팀장: 자재요청 시트 ─────────────────────────────────
-function RequestForm({ session, projectName, catalog, zones, onSubmit, saving }) {
-  const myZones = zones.filter(z => z.projectId === session.projectId);
-  const floors = [...new Set(myZones.map(z => z.floor).filter(Boolean))];
-  const [floor, setFloor] = useState('');
-  const rooms = [...new Set(myZones.filter(z => z.floor === floor).map(z => z.room).filter(Boolean))];
-  const [room, setRoom] = useState('');
-  const zoneNames = [...new Set(myZones.filter(z => z.floor === floor && z.room === room).map(z => z.zone).filter(Boolean))];
-  const [zone, setZone] = useState('');
-
-  const [process, setProcess] = useState(PROCESSES[0]);
+function RequestForm({ session, projectName, catalog, stock, requests, onSubmit, saving }) {
   const [note, setNote] = useState('');
   const [items, setItems] = useState([newItemRow(catalog)]);
   const [justSubmitted, setJustSubmitted] = useState(false);
 
-  useEffect(() => { if (!floor && floors.length > 0) setFloor(floors[0]); }, [floors.join('|')]);
-  useEffect(() => { if (rooms.length > 0 && !rooms.includes(room)) setRoom(rooms[0]); }, [rooms.join('|')]);
-  useEffect(() => { if (zoneNames.length > 0 && !zoneNames.includes(zone)) setZone(zoneNames[0]); }, [zoneNames.join('|')]);
   useEffect(() => { setItems([newItemRow(catalog)]); }, [catalog.length]);
 
   function updateItem(id, updated) { setItems(items.map(it => it.id === id ? updated : it)); }
@@ -472,18 +531,12 @@ function RequestForm({ session, projectName, catalog, zones, onSubmit, saving })
   function removeItem(id) { if (items.length === 1) return; setItems(items.filter(it => it.id !== id)); }
 
   async function handleSubmit() {
-    // 드롭다운에는 첫 옵션이 표시되고 있지만 state가 아직 빈 경우가 있을 수 있어 실제 사용 값을 여기서 확정
-    const effFloor = floor || floors[0] || '';
-    const effRoom = room || rooms[0] || '';
-    const effZone = zone || zoneNames[0] || '';
-    if (!effFloor || !effRoom || !effZone) { alert('구역을 모두 선택해주세요. 관리자에게 구역 등록을 요청하세요.'); return; }
     if (catalog.length === 0) { alert('품목이 등록되어 있지 않습니다.'); return; }
     const valid = items.filter(it => it.name && Number(it.qty) > 0);
     if (valid.length === 0) { alert('최소 1개 이상의 품목에 수량을 입력해주세요.'); return; }
-    const zoneName = `${effFloor} · ${effRoom} · ${effZone}`;
     const payload = {
       id: genId(), reqNo: genReqNo(), requester: session.name, username: session.username,
-      projectId: session.projectId, zoneName, process, note: note.trim(), createdAt: new Date().toISOString(),
+      projectId: session.projectId, zoneName: '', process: '', note: note.trim(), createdAt: new Date().toISOString(),
       items: valid.map(it => ({ id: genId(), name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit, status: '요청됨' })),
     };
     await onSubmit(payload);
@@ -499,36 +552,10 @@ function RequestForm({ session, projectName, catalog, zones, onSubmit, saving })
         <span className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>NEW REQUEST</span>
       </div>
 
-      <div className="mrs-top-grid" style={{ marginBottom: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
         <div><label className="mrs-field-label">요청자</label><input className="mrs-input" value={session.name} disabled /></div>
         <div><label className="mrs-field-label">프로젝트</label><input className="mrs-input" value={projectName} disabled /></div>
-        <div><label className="mrs-field-label">공정</label><select className="mrs-select" value={process} onChange={e => setProcess(e.target.value)}>{PROCESSES.map(p => <option key={p} value={p}>{p}</option>)}</select></div>
       </div>
-
-      <label className="mrs-field-label">구역 (층 / 실 / 구역)</label>
-      {myZones.length === 0 ? (
-        <div style={{ padding: 10, background: '#FBE7DA', color: '#B84B10', fontSize: 13, borderRadius: 3, marginBottom: 14 }}>
-          이 프로젝트에 등록된 구역이 없습니다. 관리자에게 구역 등록을 요청하세요.
-        </div>
-      ) : (
-        <div className="mrs-zone-grid" style={{ marginBottom: 14 }}>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>층</span>
-            <select className="mrs-select" value={floor} onChange={e => { setFloor(e.target.value); setRoom(''); setZone(''); }}>
-              {floors.map(f => <option key={f} value={f}>{f}</option>)}
-            </select>
-          </div>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>실</span>
-            <select className="mrs-select" value={room} onChange={e => { setRoom(e.target.value); setZone(''); }}>
-              {rooms.map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
-          </div>
-          <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>구역</span>
-            <select className="mrs-select" value={zone} onChange={e => setZone(e.target.value)}>
-              {zoneNames.map(z => <option key={z} value={z}>{z}</option>)}
-            </select>
-          </div>
-        </div>
-      )}
 
       <div style={{ marginBottom: 8 }}><label className="mrs-field-label">요청 품목</label></div>
       {catalog.length === 0 ? (
@@ -537,7 +564,11 @@ function RequestForm({ session, projectName, catalog, zones, onSubmit, saving })
         </div>
       ) : (
         <>
-          {items.map(it => <ItemRowEditor key={it.id} item={it} catalog={catalog} onChange={u => updateItem(it.id, u)} onRemove={() => removeItem(it.id)} removable={items.length > 1} />)}
+          {items.map(it => (
+            <ItemRowEditor key={it.id} item={it} catalog={catalog}
+              stockRemain={computeStockRemain(stock, requests, session.projectId, it.name, it.spec, it.color)}
+              onChange={u => updateItem(it.id, u)} onRemove={() => removeItem(it.id)} removable={items.length > 1} />
+          ))}
           <button className="mrs-btn mrs-btn-ghost" style={{ marginTop: 10 }} onClick={addItem}><Plus size={15} /> 품목 추가</button>
         </>
       )}
@@ -597,7 +628,7 @@ function MyRequestList({ requests, session, projects, onConfirmReceipt, onDelete
             <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{r.reqNo}</span>
             <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{fmtDate(r.createdAt)}</span>
           </div>
-          <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 10 }}>{r.zoneName} · {r.process}</div>
+          {r.note && <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 10 }}>{r.note}</div>}
           {r.items.map(it => (
             <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px dashed var(--paper-line)' }}>
               <span style={{ fontSize: 13 }}><b>{it.name}</b> {it.spec}{it.color && it.color !== 'N/A' ? ` ${it.color}` : ''} · {it.qty}{it.unit}</span>
@@ -634,22 +665,11 @@ function MyRequestList({ requests, session, projects, onConfirmReceipt, onDelete
 }
 
 // ── 팀장: 물량반출 ──────────────────────────────────────
-function ReturnPanel({ session, projectName, catalog, zones, returns, onSubmit, saving }) {
-  const myZones = zones.filter(z => z.projectId === session.projectId);
-  const floors = [...new Set(myZones.map(z => z.floor).filter(Boolean))];
-  const [floor, setFloor] = useState('');
-  const rooms = [...new Set(myZones.filter(z => z.floor === floor).map(z => z.room).filter(Boolean))];
-  const [room, setRoom] = useState('');
-  const zoneNames = [...new Set(myZones.filter(z => z.floor === floor && z.room === room).map(z => z.zone).filter(Boolean))];
-  const [zone, setZone] = useState('');
-
+function ReturnPanel({ session, projectName, catalog, returns, onSubmit, saving }) {
   const [reason, setReason] = useState('');
   const [items, setItems] = useState([newItemRow(catalog)]);
   const [justSubmitted, setJustSubmitted] = useState(false);
 
-  useEffect(() => { if (!floor && floors.length > 0) setFloor(floors[0]); }, [floors.join('|')]);
-  useEffect(() => { if (rooms.length > 0 && !rooms.includes(room)) setRoom(rooms[0]); }, [rooms.join('|')]);
-  useEffect(() => { if (zoneNames.length > 0 && !zoneNames.includes(zone)) setZone(zoneNames[0]); }, [zoneNames.join('|')]);
   useEffect(() => { setItems([newItemRow(catalog)]); }, [catalog.length]);
 
   function updateItem(id, updated) { setItems(items.map(it => it.id === id ? updated : it)); }
@@ -657,17 +677,12 @@ function ReturnPanel({ session, projectName, catalog, zones, returns, onSubmit, 
   function removeItem(id) { if (items.length === 1) return; setItems(items.filter(it => it.id !== id)); }
 
   async function handleSubmit() {
-    const effFloor = floor || floors[0] || '';
-    const effRoom = room || rooms[0] || '';
-    const effZone = zone || zoneNames[0] || '';
-    if (!effFloor || !effRoom || !effZone) { alert('구역을 모두 선택해주세요.'); return; }
     if (catalog.length === 0) { alert('품목이 등록되어 있지 않습니다.'); return; }
     const valid = items.filter(it => it.name && Number(it.qty) > 0);
     if (valid.length === 0) { alert('최소 1개 이상의 품목에 수량을 입력해주세요.'); return; }
-    const zoneName = `${effFloor} · ${effRoom} · ${effZone}`;
     const payload = {
       id: genId(), reqNo: genReqNo(), requester: session.name, username: session.username,
-      projectId: session.projectId, zoneName, reason: reason.trim(), createdAt: new Date().toISOString(),
+      projectId: session.projectId, zoneName: '', reason: reason.trim(), createdAt: new Date().toISOString(),
       items: valid.map(it => ({ id: genId(), name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit })),
     };
     await onSubmit(payload);
@@ -697,30 +712,10 @@ function ReturnPanel({ session, projectName, catalog, zones, returns, onSubmit, 
           <span className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>RETURN REQUEST</span>
         </div>
 
-        <label className="mrs-field-label">구역 (층 / 실 / 구역)</label>
-        {myZones.length === 0 ? (
-          <div style={{ padding: 10, background: '#FBE7DA', color: '#B84B10', fontSize: 13, borderRadius: 3, marginBottom: 14 }}>
-            이 프로젝트에 등록된 구역이 없습니다.
-          </div>
-        ) : (
-          <div className="mrs-zone-grid" style={{ marginBottom: 14 }}>
-            <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>층</span>
-              <select className="mrs-select" value={floor} onChange={e => { setFloor(e.target.value); setRoom(''); setZone(''); }}>
-                {floors.map(f => <option key={f} value={f}>{f}</option>)}
-              </select>
-            </div>
-            <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>실</span>
-              <select className="mrs-select" value={room} onChange={e => { setRoom(e.target.value); setZone(''); }}>
-                {rooms.map(r => <option key={r} value={r}>{r}</option>)}
-              </select>
-            </div>
-            <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>구역</span>
-              <select className="mrs-select" value={zone} onChange={e => setZone(e.target.value)}>
-                {zoneNames.map(z => <option key={z} value={z}>{z}</option>)}
-              </select>
-            </div>
-          </div>
-        )}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
+          <div><label className="mrs-field-label">요청자</label><input className="mrs-input" value={session.name} disabled /></div>
+          <div><label className="mrs-field-label">프로젝트</label><input className="mrs-input" value={projectName} disabled /></div>
+        </div>
 
         <div style={{ marginBottom: 8 }}><label className="mrs-field-label">반출 품목</label></div>
         {catalog.length === 0 ? (
@@ -756,7 +751,7 @@ function ReturnPanel({ session, projectName, catalog, zones, returns, onSubmit, 
             <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{r.reqNo}</span>
             <StatusBadge value={r.status} />
           </div>
-          <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>{r.zoneName}</div>
+          {r.reason && <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>{r.reason}</div>}
           {r.items.map(it => (
             <div key={it.id} style={{ fontSize: 13, padding: '3px 0' }}>{it.name} {it.spec} · {it.qty}{it.unit}</div>
           ))}
@@ -769,7 +764,7 @@ function ReturnPanel({ session, projectName, catalog, zones, returns, onSubmit, 
   );
 }
 
-function LeaderApp({ session, requests, returns, projects, catalog, zones, onSubmit, onSubmitReturn, onConfirmReceipt, onDeleteRequest, saving }) {
+function LeaderApp({ session, requests, returns, projects, catalog, stock, onSubmit, onSubmitReturn, onConfirmReceipt, onDeleteRequest, saving }) {
   const [tab, setTab] = useState('form');
   const projectName = (projects.find(p => p.id === session.projectId) || {}).name || '(알 수 없음)';
   // 팀장 자신의 반출내역만 필터링
@@ -782,9 +777,9 @@ function LeaderApp({ session, requests, returns, projects, catalog, zones, onSub
         <button className={`mrs-tab ${tab === 'return' ? 'active' : ''}`} onClick={() => setTab('return')}><PackageMinus size={16} /> 물량반출</button>
         <button className={`mrs-tab ${tab === 'returnlist' ? 'active' : ''}`} onClick={() => setTab('returnlist')}><CalendarDays size={16} /> 반출리스트</button>
       </div>
-      {tab === 'form' && <RequestForm session={session} projectName={projectName} catalog={catalog} zones={zones} onSubmit={onSubmit} saving={saving} />}
+      {tab === 'form' && <RequestForm session={session} projectName={projectName} catalog={catalog} stock={stock} requests={requests} onSubmit={onSubmit} saving={saving} />}
       {tab === 'mylist' && <MyRequestList requests={requests} session={session} projects={projects} onConfirmReceipt={onConfirmReceipt} onDelete={onDeleteRequest} saving={saving} />}
-      {tab === 'return' && <ReturnPanel session={session} projectName={projectName} catalog={catalog} zones={zones} returns={returns} onSubmit={onSubmitReturn} saving={saving} />}
+      {tab === 'return' && <ReturnPanel session={session} projectName={projectName} catalog={catalog} returns={returns} onSubmit={onSubmitReturn} saving={saving} />}
       {tab === 'returnlist' && <ReturnsTable returns={myReturns} projects={projects} />}
     </div>
   );
@@ -793,8 +788,6 @@ function LeaderApp({ session, requests, returns, projects, catalog, zones, onSub
 // ── 누계요청리스트 (관리자/자재팀 공용) ─────────────────────
 function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, allowPdf, role }) {
   const [projectFilter, setProjectFilter] = useState('전체');
-  const [zoneQuery, setZoneQuery] = useState('');
-  const [processFilter, setProcessFilter] = useState('전체');
   const [statusFilter, setStatusFilter] = useState('전체');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -809,7 +802,6 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, al
       rows.push({
         req: r, reqId: r.id, itemId: it.id, reqNo: r.reqNo, requester: r.requester,
         projectId: r.projectId, projectName: projectNameById[r.projectId] || '(삭제된 프로젝트)',
-        zoneName: r.zoneName || '', process: r.process,
         name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit,
         status: it.status, note: r.note, createdAt: r.createdAt,
       });
@@ -819,8 +811,6 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, al
   const statuses = ['전체', ...STATUS_FLOW];
   const filtered = rows.filter(r =>
     (projectFilter === '전체' || r.projectId === projectFilter) &&
-    (zoneQuery.trim() === '' || (r.zoneName || '').includes(zoneQuery.trim())) &&
-    (processFilter === '전체' || r.process === processFilter) &&
     (statusFilter === '전체' || r.status === statusFilter) &&
     (dateFrom === '' || new Date(r.createdAt) >= new Date(dateFrom + 'T00:00:00')) &&
     (dateTo === '' || new Date(r.createdAt) <= new Date(dateTo + 'T23:59:59'))
@@ -832,11 +822,11 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, al
   function exportExcel() {
     const data = filtered.map(r => ({
       '프로젝트': r.projectName, '요청번호': r.reqNo, '요청일시': fmtDate(r.createdAt), '요청자': r.requester,
-      '구역': r.zoneName, '공정': r.process, '품목명': r.name, '규격': r.spec, '색상': r.color,
+      '품목명': r.name, '규격': r.spec, '색상': r.color,
       '수량': r.qty, '단위': r.unit, '상태': r.status, '특이사항': r.note || '',
     }));
     const ws = XLSX.utils.json_to_sheet(data);
-    ws['!cols'] = [{wch:16},{wch:18},{wch:16},{wch:12},{wch:14},{wch:8},{wch:16},{wch:12},{wch:8},{wch:8},{wch:8},{wch:10},{wch:30}];
+    ws['!cols'] = [{wch:16},{wch:18},{wch:16},{wch:12},{wch:16},{wch:12},{wch:8},{wch:8},{wch:8},{wch:10},{wch:30}];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '자재요청');
     const d = new Date();
@@ -870,7 +860,6 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, al
       </div>
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14, alignItems: 'center' }}>
-        <input className="mrs-input" style={{ width: 160 }} value={zoneQuery} onChange={e => setZoneQuery(e.target.value)} placeholder="구역명 검색" />
         {scope === 'all' && (
           <>
             <input className="mrs-input" type="date" style={{ width: 145 }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
@@ -878,9 +867,6 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, al
             <input className="mrs-input" type="date" style={{ width: 145 }} value={dateTo} onChange={e => setDateTo(e.target.value)} />
           </>
         )}
-        <select className="mrs-select" style={{ width: 'auto' }} value={processFilter} onChange={e => setProcessFilter(e.target.value)}>
-          <option value="전체">전체 공정</option>{PROCESSES.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
         <select className="mrs-select" style={{ width: 'auto' }} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
           {statuses.map(s => <option key={s} value={s}>{s === '전체' ? '전체 상태' : s}</option>)}
         </select>
@@ -893,14 +879,14 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, al
       ) : (
         <div className="mrs-table-wrap">
           <table className="mrs-table">
-            <thead><tr><th>프로젝트</th><th>요청번호</th><th>요청일시</th><th>요청자</th><th>구역</th><th>공정</th><th>품목명</th><th>규격</th><th>색상</th><th>수량</th><th>상태</th><th></th><th></th></tr></thead>
+            <thead><tr><th>프로젝트</th><th>요청번호</th><th>요청일시</th><th>요청자</th><th>품목명</th><th>규격</th><th>색상</th><th>수량</th><th>상태</th><th></th><th></th></tr></thead>
             <tbody>
               {filtered.map(r => (
                 <tr key={r.itemId}>
                   <td style={{ fontWeight: 600 }}>{r.projectName}</td>
                   <td className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{r.reqNo}</td>
                   <td className="mrs-mono" style={{ fontSize: 12 }}>{fmtDate(r.createdAt)}</td>
-                  <td>{r.requester}</td><td>{r.zoneName}</td><td>{r.process}</td>
+                  <td>{r.requester}</td>
                   <td style={{ fontWeight: 600 }}>{r.name}</td><td style={{ color: 'var(--ink-soft)' }}>{r.spec || '-'}</td>
                   <td style={{ color: 'var(--ink-soft)' }}>{r.color || '-'}</td>
                   <td className="mrs-mono">{r.qty} {r.unit}</td>
@@ -954,11 +940,11 @@ function ReturnsTable({ returns, projects }) {
   function exportExcel() {
     const data = filtered.map(r => ({
       '프로젝트': r.projectName, '반출번호': r.reqNo, '반출일시': fmtDate(r.createdAt), '요청자': r.requester,
-      '구역': r.zoneName, '품목명': r.name, '규격': r.spec, '색상': r.color,
+      '품목명': r.name, '규격': r.spec, '색상': r.color,
       '수량': r.qty, '단위': r.unit, '상태': r.status, '사유': r.reason || '',
     }));
     const ws = XLSX.utils.json_to_sheet(data);
-    ws['!cols'] = [{wch:16},{wch:18},{wch:16},{wch:12},{wch:14},{wch:16},{wch:12},{wch:8},{wch:8},{wch:8},{wch:12},{wch:30}];
+    ws['!cols'] = [{wch:16},{wch:18},{wch:16},{wch:12},{wch:16},{wch:12},{wch:8},{wch:8},{wch:8},{wch:12},{wch:30}];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '물량반출');
     const d = new Date();
@@ -993,14 +979,14 @@ function ReturnsTable({ returns, projects }) {
       ) : (
         <div className="mrs-table-wrap">
           <table className="mrs-table">
-            <thead><tr><th>프로젝트</th><th>반출번호</th><th>반출일시</th><th>요청자</th><th>구역</th><th>품목명</th><th>규격</th><th>색상</th><th>수량</th><th>상태</th><th></th></tr></thead>
+            <thead><tr><th>프로젝트</th><th>반출번호</th><th>반출일시</th><th>요청자</th><th>품목명</th><th>규격</th><th>색상</th><th>수량</th><th>상태</th><th></th></tr></thead>
             <tbody>
               {filtered.map((r, i) => (
                 <tr key={i}>
                   <td style={{ fontWeight: 600 }}>{r.projectName}</td>
                   <td className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{r.reqNo}</td>
                   <td className="mrs-mono" style={{ fontSize: 12 }}>{fmtDate(r.createdAt)}</td>
-                  <td>{r.requester}</td><td>{r.zoneName}</td>
+                  <td>{r.requester}</td>
                   <td style={{ fontWeight: 600 }}>{r.name}</td><td style={{ color: 'var(--ink-soft)' }}>{r.spec || '-'}</td>
                   <td style={{ color: 'var(--ink-soft)' }}>{r.color || '-'}</td>
                   <td className="mrs-mono">{r.qty} {r.unit}</td>
@@ -1558,7 +1544,7 @@ function AdminApp({ session, requests, returns, projects, users, zones, catalog,
 
       {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} />}
       {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" allowPdf />}
-      {tab === 'return' && <MaterialReturns returns={returns} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
+      {tab === 'return' && <MaterialReturns returns={returns} projects={projects} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
       {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} />}
       {tab === 'stock' && <StockView stock={stock} requests={requests} projects={projects} />}
       {tab === 'manage' && (
@@ -1604,7 +1590,7 @@ function MaterialOutbound({ requests, projects, onUpdateStatus }) {
             <StatusBadge value="요청됨" />
           </div>
           <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 10 }}>
-            {projectNameById[r.projectId] || '-'} · {r.zoneName || '-'} · {fmtDate(r.createdAt)}
+            {projectNameById[r.projectId] || '-'} · {fmtDate(r.createdAt)}
           </div>
           {r.items.map(it => (
             <div key={it.id} style={{ fontSize: 13, padding: '5px 0', borderTop: '1px dashed var(--paper-line)' }}>
@@ -1621,8 +1607,10 @@ function MaterialOutbound({ requests, projects, onUpdateStatus }) {
 }
 
 // ── 자재팀: 반출확인 대기 ──────────────────────────────
-function MaterialReturns({ returns, onConfirmReturn, saving }) {
+function MaterialReturns({ returns, projects = [], onConfirmReturn, saving }) {
   const [confirmingId, setConfirmingId] = useState(null);
+  const projectNameById = {};
+  projects.forEach(p => { projectNameById[p.id] = p.name; });
   const pending = returns.filter(r => r.status !== '반출확인완료').slice().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   async function handleConfirm(r, sig) {
     await onConfirmReturn(r.id, sig);
@@ -1638,7 +1626,7 @@ function MaterialReturns({ returns, onConfirmReturn, saving }) {
             <span style={{ fontSize: 14, fontWeight: 600 }}>{r.requester}</span>
             <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{fmtDate(r.createdAt)}</span>
           </div>
-          <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>{r.zoneName}{r.reason ? ` · ${r.reason}` : ''}</div>
+          {(projectNameById[r.projectId] || r.reason) && <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>{projectNameById[r.projectId] || ''}{r.reason ? ` · ${r.reason}` : ''}</div>}
           {r.items.map(it => (
             <div key={it.id} style={{ fontSize: 13, padding: '3px 0' }}>{it.name} {it.spec} · {it.qty}{it.unit}</div>
           ))}
@@ -1672,7 +1660,7 @@ function MaterialApp({ requests, projects, returns, stock, onUpdateStatus, onCon
       </div>
       {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} />}
       {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} scope="all" allowPdf role="material" />}
-      {tab === 'return' && <MaterialReturns returns={returns} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
+      {tab === 'return' && <MaterialReturns returns={returns} projects={projects} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
       {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} />}
       {tab === 'stock' && <StockView stock={stock} requests={requests} projects={projects} />}
     </div>
@@ -1714,18 +1702,15 @@ export default function App() {
   async function loadData(role) {
     setDataLoading(true); setError(null);
     try {
-      const calls = [apiGet('list'), apiGet('projects'), apiGet('returns'), apiGet('zones'), apiGet('catalog')];
-      if (role === 'admin' || role === 'material') calls.push(apiGet('stock'));
+      const calls = [apiGet('list'), apiGet('projects'), apiGet('returns'), apiGet('catalog'), apiGet('stock')];
       if (role === 'admin') calls.push(apiGet('users'));
       const results = await Promise.all(calls);
       setRequests(Array.isArray(results[0]) ? results[0] : []);
       setProjects(Array.isArray(results[1]) && results[1].length ? results[1] : DEFAULT_PROJECTS);
       setReturns(Array.isArray(results[2]) ? results[2] : []);
-      setZones(Array.isArray(results[3]) ? results[3] : []);
-      setCatalog(Array.isArray(results[4]) ? results[4] : []);
-      let idx = 5;
-      if (role === 'admin' || role === 'material') { setStock(Array.isArray(results[idx]) ? results[idx] : []); idx++; }
-      if (role === 'admin') setUsers(Array.isArray(results[idx]) ? results[idx] : []);
+      setCatalog(Array.isArray(results[3]) ? results[3] : []);
+      setStock(Array.isArray(results[4]) ? results[4] : []);
+      if (role === 'admin') setUsers(Array.isArray(results[5]) ? results[5] : []);
     } catch (e) {
       setError('데이터를 불러오지 못했습니다. 네트워크를 확인해주세요.');
     } finally {
@@ -1917,7 +1902,7 @@ export default function App() {
       ) : session.role === 'material' ? (
         <MaterialApp requests={requests} projects={projects} returns={returns} stock={stock} onUpdateStatus={handleUpdateStatus} onConfirmReturn={handleConfirmReturn} savingSettings={savingSettings} />
       ) : (
-        <LeaderApp session={session} requests={requests} returns={returns} projects={projects} catalog={catalog} zones={zones} onSubmit={handleSubmit} onSubmitReturn={handleSubmitReturn} onConfirmReceipt={handleConfirmReceipt} onDeleteRequest={handleDelete} saving={saving} />
+        <LeaderApp session={session} requests={requests} returns={returns} projects={projects} catalog={catalog} stock={stock} onSubmit={handleSubmit} onSubmitReturn={handleSubmitReturn} onConfirmReceipt={handleConfirmReceipt} onDeleteRequest={handleDelete} saving={saving} />
       )}
     </div>
   );
