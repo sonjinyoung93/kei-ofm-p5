@@ -1312,17 +1312,21 @@ function StockManager({ stock, catalog, projects, onSave, saving }) {
         <div style={{ fontSize: 13, color: 'var(--ink-soft)', padding: '10px 0' }}>등록된 보유물량이 없습니다.</div>
       ) : (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.3fr 1fr 0.8fr 0.8fr 0.8fr auto', gap: 6, marginBottom: 4 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.2fr 1fr 0.7fr 0.7fr 0.8fr 1fr auto', gap: 6, marginBottom: 4 }}>
             <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>프로젝트</span>
             <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목명</span>
             <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
             <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span>
             <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>단위</span>
             <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>수량(낱개)</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>= 대단위 환산</span>
             <span></span>
           </div>
-          {draft.map((it, idx) => (
-            <div key={it.id} style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.3fr 1fr 0.8fr 0.8fr 0.8fr auto', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+          {draft.map((it, idx) => {
+            const cat = findCatalogItem(catalog, it.itemName, it.itemSpec, it.itemColor);
+            const conv = cat && ((cat.bigUnit && Number(cat.factor1) > 0) || (cat.midUnit && Number(cat.factor2) > 0));
+            return (
+            <div key={it.id} style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.2fr 1fr 0.7fr 0.7fr 0.8fr 1fr auto', gap: 6, marginBottom: 6, alignItems: 'center' }}>
               <select className="mrs-select" value={it.projectId} onChange={e => update(idx, 'projectId', e.target.value)}>
                 {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
@@ -1333,9 +1337,13 @@ function StockManager({ stock, catalog, projects, onSave, saving }) {
                 {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
               </select>
               <input className="mrs-input" type="number" min="0" value={it.qty} onChange={e => update(idx, 'qty', e.target.value)} />
+              <span style={{ fontSize: 12, fontWeight: 600, color: conv ? 'var(--accent)' : 'var(--ink-soft)' }}>
+                {conv ? formatStockByUnit(cat, Number(it.qty) || 0) : '—'}
+              </span>
               <button className="mrs-btn mrs-btn-danger" onClick={() => remove(idx)} style={{ padding: 8 }}><Trash2 size={15} /></button>
             </div>
-          ))}
+            );
+          })}
         </>
       )}
       <button className="mrs-btn mrs-btn-primary" style={{ marginTop: 10 }} disabled={saving || draft.some(it => !it.itemName?.trim() || !it.itemSpec?.trim() || !it.projectId)} onClick={() => onSave(draft)}><Save size={15} /> 전체 저장</button>
@@ -1344,7 +1352,7 @@ function StockManager({ stock, catalog, projects, onSave, saving }) {
 }
 
 // ── 재고 현황 뷰 (자재팀/관리자) ────────────────────────
-function StockView({ stock, requests, projects }) {
+function StockView({ stock, requests, projects, catalog = [] }) {
   const [projectFilter, setProjectFilter] = useState('전체');
   const projectNameById = {};
   projects.forEach(p => { projectNameById[p.id] = p.name; });
@@ -1364,10 +1372,11 @@ function StockView({ stock, requests, projects }) {
     const key = `${s.projectId}|${s.itemName}|${s.itemSpec}|${s.itemColor || 'N/A'}`;
     const delivered = deliveredMap[key] || 0;
     const remain = (Number(s.qty) || 0) - delivered;
+    const cat = findCatalogItem(catalog, s.itemName, s.itemSpec, s.itemColor);
     return {
       id: s.id, projectId: s.projectId, projectName: projectNameById[s.projectId] || '-',
       itemName: s.itemName, itemSpec: s.itemSpec, itemColor: s.itemColor, unit: s.unit,
-      stockQty: Number(s.qty) || 0, deliveredQty: delivered, remain,
+      stockQty: Number(s.qty) || 0, deliveredQty: delivered, remain, cat,
     };
   });
 
@@ -1377,10 +1386,12 @@ function StockView({ stock, requests, projects }) {
   function exportExcel() {
     const data = filtered.map(r => ({
       '프로젝트': r.projectName, '품목명': r.itemName, '규격': r.itemSpec, '색상': r.itemColor,
-      '보유물량': r.stockQty, '입고완료': r.deliveredQty, '재고물량': r.remain, '단위': r.unit,
+      '보유물량': formatStockByUnit(r.cat, r.stockQty), '입고완료': formatStockByUnit(r.cat, r.deliveredQty),
+      '재고물량': formatStockByUnit(r.cat, r.remain),
+      '보유(낱개)': r.stockQty, '입고(낱개)': r.deliveredQty, '재고(낱개)': r.remain, '단위': r.unit,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
-    ws['!cols'] = [{wch:20},{wch:16},{wch:12},{wch:8},{wch:10},{wch:10},{wch:10},{wch:8}];
+    ws['!cols'] = [{wch:20},{wch:16},{wch:18},{wch:8},{wch:14},{wch:14},{wch:14},{wch:10},{wch:10},{wch:10},{wch:8}];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '재고현황');
     const d = new Date();
@@ -1403,20 +1414,31 @@ function StockView({ stock, requests, projects }) {
       ) : (
         <div className="mrs-table-wrap">
           <table className="mrs-table">
-            <thead><tr><th>프로젝트</th><th>품목</th><th>규격</th><th>색상</th><th>보유물량</th><th>입고완료</th><th>재고물량</th><th>단위</th></tr></thead>
+            <thead><tr><th>프로젝트</th><th>품목</th><th>규격</th><th>색상</th><th>보유물량</th><th>입고완료</th><th>재고물량</th></tr></thead>
             <tbody>
-              {filtered.map(r => (
+              {filtered.map(r => {
+                const conv = r.cat && ((r.cat.bigUnit && Number(r.cat.factor1) > 0) || (r.cat.midUnit && Number(r.cat.factor2) > 0));
+                return (
                 <tr key={r.id}>
                   <td style={{ fontWeight: 600 }}>{r.projectName}</td>
                   <td style={{ fontWeight: 600 }}>{r.itemName}</td>
                   <td style={{ color: 'var(--ink-soft)' }}>{r.itemSpec}</td>
                   <td style={{ color: 'var(--ink-soft)' }}>{r.itemColor}</td>
-                  <td className="mrs-mono">{r.stockQty}</td>
-                  <td className="mrs-mono" style={{ color: '#2B5A8C' }}>{r.deliveredQty}</td>
-                  <td className="mrs-mono" style={{ color: r.remain < 0 ? '#B84B10' : '#2E6B47', fontWeight: 600 }}>{r.remain}</td>
-                  <td>{r.unit}</td>
+                  <td>
+                    <div style={{ fontWeight: 600 }}>{formatStockByUnit(r.cat, r.stockQty)}</div>
+                    {conv && <div className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>{r.stockQty.toLocaleString()} {r.unit}</div>}
+                  </td>
+                  <td>
+                    <div style={{ color: '#2B5A8C', fontWeight: 600 }}>{formatStockByUnit(r.cat, r.deliveredQty)}</div>
+                    {conv && r.deliveredQty > 0 && <div className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>{r.deliveredQty.toLocaleString()} {r.unit}</div>}
+                  </td>
+                  <td>
+                    <div style={{ color: r.remain < 0 ? '#B84B10' : '#2E6B47', fontWeight: 700 }}>{formatStockByUnit(r.cat, r.remain)}</div>
+                    {conv && <div className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>{r.remain.toLocaleString()} {r.unit}</div>}
+                  </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1546,7 +1568,7 @@ function AdminApp({ session, requests, returns, projects, users, zones, catalog,
       {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" allowPdf />}
       {tab === 'return' && <MaterialReturns returns={returns} projects={projects} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
       {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} />}
-      {tab === 'stock' && <StockView stock={stock} requests={requests} projects={projects} />}
+      {tab === 'stock' && <StockView stock={stock} requests={requests} projects={projects} catalog={catalog} />}
       {tab === 'manage' && (
         <div>
           <ProjectManager projects={projects} onSave={onSaveProjects} saving={savingSettings} />
@@ -1647,7 +1669,7 @@ function MaterialReturns({ returns, projects = [], onConfirmReturn, saving }) {
   );
 }
 
-function MaterialApp({ requests, projects, returns, stock, onUpdateStatus, onConfirmReturn, savingSettings }) {
+function MaterialApp({ requests, projects, returns, stock, catalog, onUpdateStatus, onConfirmReturn, savingSettings }) {
   const [tab, setTab] = useState('outbound');
   return (
     <div className="mrs-body">
@@ -1662,7 +1684,7 @@ function MaterialApp({ requests, projects, returns, stock, onUpdateStatus, onCon
       {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} scope="all" allowPdf role="material" />}
       {tab === 'return' && <MaterialReturns returns={returns} projects={projects} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
       {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} />}
-      {tab === 'stock' && <StockView stock={stock} requests={requests} projects={projects} />}
+      {tab === 'stock' && <StockView stock={stock} requests={requests} projects={projects} catalog={catalog} />}
     </div>
   );
 }
@@ -1900,7 +1922,7 @@ export default function App() {
           savingSettings={savingSettings}
         />
       ) : session.role === 'material' ? (
-        <MaterialApp requests={requests} projects={projects} returns={returns} stock={stock} onUpdateStatus={handleUpdateStatus} onConfirmReturn={handleConfirmReturn} savingSettings={savingSettings} />
+        <MaterialApp requests={requests} projects={projects} returns={returns} stock={stock} catalog={catalog} onUpdateStatus={handleUpdateStatus} onConfirmReturn={handleConfirmReturn} savingSettings={savingSettings} />
       ) : (
         <LeaderApp session={session} requests={requests} returns={returns} projects={projects} catalog={catalog} stock={stock} onSubmit={handleSubmit} onSubmitReturn={handleSubmitReturn} onConfirmReceipt={handleConfirmReceipt} onDeleteRequest={handleDelete} saving={saving} />
       )}
