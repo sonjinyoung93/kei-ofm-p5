@@ -1233,23 +1233,81 @@ function CatalogManager({ catalog, onSave, saving }) {
 }
 
 // ── 관리 설정: 보유물량 (프로젝트+품목+규격+색상 + 엑셀 업로드) ──
-function StockManager({ stock, catalog, projects, onSave, saving }) {
-  const [draft, setDraft] = useState(stock);
-  const fileRef = useRef(null);
-  useEffect(() => setDraft(stock), [stock]);
+// 낱개 총량을 대/중/낱개로 분해 (보유물량 편집 시드용)
+function decomposeToUnits(cat, baseQty) {
+  const q = Number(baseQty) || 0;
+  if (!cat) return { big: '', mid: '', small: q ? String(q) : '' };
+  const f1 = Number(cat.factor1) || 0, f2 = Number(cat.factor2) || 0;
+  const hasMid = cat.midUnit && f2 > 0;
+  const hasBig = cat.bigUnit && f1 > 0;
+  if (hasMid) {
+    const perBig = f1 * f2;
+    const big = Math.floor(q / perBig);
+    const rest = q - big * perBig;
+    const mid = Math.floor(rest / f2);
+    const small = +(rest - mid * f2).toFixed(2);
+    return { big: big ? String(big) : '', mid: mid ? String(mid) : '', small: small ? String(small) : '' };
+  }
+  if (hasBig) {
+    const big = Math.floor(q / f1);
+    const small = +(q - big * f1).toFixed(2);
+    return { big: big ? String(big) : '', mid: '', small: small ? String(small) : '' };
+  }
+  return { big: '', mid: '', small: q ? String(q) : '' };
+}
 
-  function addRow() { setDraft([...draft, { id: genId('stock'), projectId: projects[0]?.id || '', itemName: '', itemSpec: '', itemColor: 'N/A', qty: 0, unit: 'EA' }]); }
+function StockManager({ stock, catalog, projects, onSave, saving }) {
+  // 기존 stock(낱개 qty)을 big/mid/small로 분해해서 편집 상태 구성
+  function seed(list) {
+    return list.map(s => {
+      const cat = findCatalogItem(catalog, s.itemName, s.itemSpec, s.itemColor);
+      const d = decomposeToUnits(cat, s.qty);
+      return { ...s, big: d.big, mid: d.mid, small: d.small };
+    });
+  }
+  const [draft, setDraft] = useState(() => seed(stock));
+  const fileRef = useRef(null);
+  useEffect(() => setDraft(seed(stock)), [stock, catalog]);
+
+  const names = catalogNames(catalog);
+
+  function addRow() {
+    const name = names[0] || '';
+    const spec = catalogSpecs(catalog, name)[0] || '';
+    const color = catalogColors(catalog, name, spec)[0] || 'N/A';
+    const cat = findCatalogItem(catalog, name, spec, color);
+    setDraft([...draft, { id: genId('stock'), projectId: projects[0]?.id || '', itemName: name, itemSpec: spec, itemColor: color, unit: cat ? cat.unit : 'EA', big: '', mid: '', small: '', qty: 0 }]);
+  }
   function remove(idx) { setDraft(draft.filter((_, i) => i !== idx)); }
-  function update(idx, field, val) { const next = [...draft]; next[idx] = { ...next[idx], [field]: val }; setDraft(next); }
+
+  function recalc(idx, patch) {
+    const next = [...draft];
+    const row = { ...next[idx], ...patch };
+    const cat = findCatalogItem(catalog, row.itemName, row.itemSpec, row.itemColor);
+    row.qty = convertToBase(cat, row.big, row.mid, row.small);
+    row.unit = cat ? cat.unit : (row.unit || 'EA');
+    next[idx] = row;
+    setDraft(next);
+  }
+  function changeName(idx, name) {
+    const spec = catalogSpecs(catalog, name)[0] || '';
+    const color = catalogColors(catalog, name, spec)[0] || 'N/A';
+    recalc(idx, { itemName: name, itemSpec: spec, itemColor: color, big: '', mid: '', small: '' });
+  }
+  function changeSpec(idx, spec) {
+    const name = draft[idx].itemName;
+    const color = catalogColors(catalog, name, spec)[0] || 'N/A';
+    recalc(idx, { itemSpec: spec, itemColor: color, big: '', mid: '', small: '' });
+  }
 
   function downloadTemplate() {
     const rows = [
-      { '프로젝트명': 'P5 Ph1 (삼성물산)', '품목명': '무나사전선관', '규격': 'E19', '색상': 'N/A', '대단위수량': 10, '중단위수량': 35, '낱개수량': 0 },
-      { '프로젝트명': 'P5 Ph1 (삼성물산)', '품목명': '커플링', '규격': 'E19', '색상': 'N/A', '대단위수량': 10, '중단위수량': 0, '낱개수량': 2 },
-      { '프로젝트명': 'P5 Ph1 (삼성물산)', '품목명': '내화케이블', '규격': '4mm2,03C', '색상': 'N/A', '대단위수량': 0, '중단위수량': 0, '낱개수량': 141 },
+      { '프로젝트명': projects[0]?.name || 'P5 Ph1 (삼성물산)', '품목명': '무나사전선관', '규격': 'E19', '색상': 'N/A', '대단위수량': 10, '중단위수량': 35, '낱개수량': 0 },
+      { '프로젝트명': projects[0]?.name || 'P5 Ph1 (삼성물산)', '품목명': '커플링', '규격': 'E19', '색상': 'N/A', '대단위수량': 10, '중단위수량': 0, '낱개수량': 2 },
+      { '프로젝트명': projects[0]?.name || 'P5 Ph1 (삼성물산)', '품목명': '내화케이블', '규격': '0.6/1kV,TFR-8,4mm2,03C', '색상': 'N/A', '대단위수량': 0, '중단위수량': 0, '낱개수량': 141 },
     ];
     const ws = XLSX.utils.json_to_sheet(rows);
-    ws['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 18 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 10 }];
+    ws['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 22 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '보유물량');
     XLSX.writeFile(wb, '보유물량_업로드_양식.xlsx');
@@ -1271,19 +1329,20 @@ function StockManager({ stock, catalog, projects, onSave, saving }) {
           const itemSpec = String(row['규격'] || '').trim();
           const itemColor = String(row['색상'] || 'N/A').trim() || 'N/A';
           const cat = findCatalogItem(catalog, itemName, itemSpec, itemColor);
-          // 대/중/낱개 수량이 있으면 환산, 없으면 단순 수량
-          let qty;
+          let qty, big = '', mid = '', small = '';
           if (row['대단위수량'] !== undefined || row['중단위수량'] !== undefined || row['낱개수량'] !== undefined) {
-            qty = convertToBase(cat, row['대단위수량'], row['중단위수량'], row['낱개수량']);
+            big = row['대단위수량'] != null ? String(row['대단위수량']) : '';
+            mid = row['중단위수량'] != null ? String(row['중단위수량']) : '';
+            small = row['낱개수량'] != null ? String(row['낱개수량']) : '';
+            qty = convertToBase(cat, big, mid, small);
           } else {
             qty = Number(row['수량'] || row['보유물량'] || 0) || 0;
+            const d = decomposeToUnits(cat, qty); big = d.big; mid = d.mid; small = d.small;
           }
           return {
             id: genId('stock'),
             projectId: projectByName[String(row['프로젝트명'] || row['프로젝트'] || '').trim()] || projects[0]?.id || '',
-            itemName, itemSpec, itemColor,
-            unit: cat ? cat.unit : String(row['단위'] || 'EA').trim() || 'EA',
-            qty,
+            itemName, itemSpec, itemColor, unit: cat ? cat.unit : 'EA', big, mid, small, qty,
           };
         }).filter(it => it.itemName && it.itemSpec);
         if (parsed.length === 0) { alert('업로드할 데이터가 없습니다.'); return; }
@@ -1296,57 +1355,76 @@ function StockManager({ stock, catalog, projects, onSave, saving }) {
     e.target.value = '';
   }
 
+  function handleSave() {
+    // 저장 시 big/mid/small은 빼고 낱개 qty만 저장
+    const clean = draft.map(({ big, mid, small, ...rest }) => rest);
+    onSave(clean);
+  }
+
+  const GRID = '1.3fr 1.1fr 0.9fr 58px 58px 58px 1fr auto';
+
   return (
     <div className="mrs-card" style={{ padding: 18, marginBottom: 20 }}>
       <h3 className="mrs-display" style={{ fontSize: 15, margin: '0 0 12px', fontWeight: 600 }}><Package size={15} style={{ verticalAlign: -2 }} /> 보유물량 관리</h3>
-      <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 4 }}>재고 = 보유물량 − 팀장 입고확인 수량. 수량은 낱개(M/EA) 기준으로 저장됩니다.</div>
-      <div style={{ fontSize: 11, color: 'var(--ink-soft)', marginBottom: 10 }}>엑셀 업로드 시 대단위/중단위/낱개 수량을 넣으면 품목관리 계수로 자동 환산됩니다 (예: 무나사전선관 10타+35본 → 4,698M).</div>
+      <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 4 }}>재고 = 보유물량 − 팀장 입고확인 수량. 품목에 맞는 단위 칸만 입력하면 낱개로 자동 환산되어 저장됩니다.</div>
+      <div style={{ fontSize: 11, color: 'var(--ink-soft)', marginBottom: 10 }}>예: 커플링 E19 → BOX 10, EA 2 = 1,202 EA / 무나사전선관 → 타·본·M</div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-        <button className="mrs-btn mrs-btn-ghost" onClick={addRow}><Plus size={15} /> 항목 추가</button>
+        <button className="mrs-btn mrs-btn-ghost" onClick={addRow} disabled={names.length === 0}><Plus size={15} /> 항목 추가</button>
         <button className="mrs-btn mrs-btn-primary" onClick={() => fileRef.current?.click()}><Download size={15} style={{ transform: 'rotate(180deg)' }} /> 엑셀 업로드</button>
         <button className="mrs-btn mrs-btn-ghost" onClick={downloadTemplate}><Download size={15} /> 양식 다운로드</button>
         <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleUpload} />
       </div>
 
-      {draft.length === 0 ? (
+      {names.length === 0 ? (
+        <div style={{ padding: 10, background: '#FBE7DA', color: '#B84B10', fontSize: 13, borderRadius: 3 }}>먼저 품목 관리에서 품목을 등록하세요.</div>
+      ) : draft.length === 0 ? (
         <div style={{ fontSize: 13, color: 'var(--ink-soft)', padding: '10px 0' }}>등록된 보유물량이 없습니다.</div>
       ) : (
-        <>
-          <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.2fr 1fr 0.7fr 0.7fr 0.8fr 1fr auto', gap: 6, marginBottom: 4 }}>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>프로젝트</span>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목명</span>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>단위</span>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>수량(낱개)</span>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>= 대단위 환산</span>
-            <span></span>
-          </div>
-          {draft.map((it, idx) => {
-            const cat = findCatalogItem(catalog, it.itemName, it.itemSpec, it.itemColor);
-            const conv = cat && ((cat.bigUnit && Number(cat.factor1) > 0) || (cat.midUnit && Number(cat.factor2) > 0));
-            return (
-            <div key={it.id} style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.2fr 1fr 0.7fr 0.7fr 0.8fr 1fr auto', gap: 6, marginBottom: 6, alignItems: 'center' }}>
-              <select className="mrs-select" value={it.projectId} onChange={e => update(idx, 'projectId', e.target.value)}>
-                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-              <input className="mrs-input" value={it.itemName} onChange={e => update(idx, 'itemName', e.target.value)} placeholder="무나사전선관" />
-              <input className="mrs-input" value={it.itemSpec} onChange={e => update(idx, 'itemSpec', e.target.value)} placeholder="E19" />
-              <input className="mrs-input" value={it.itemColor} onChange={e => update(idx, 'itemColor', e.target.value)} placeholder="N/A" />
-              <select className="mrs-select" value={it.unit} onChange={e => update(idx, 'unit', e.target.value)}>
-                {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-              </select>
-              <input className="mrs-input" type="number" min="0" value={it.qty} onChange={e => update(idx, 'qty', e.target.value)} />
-              <span style={{ fontSize: 12, fontWeight: 600, color: conv ? 'var(--accent)' : 'var(--ink-soft)' }}>
-                {conv ? formatStockByUnit(cat, Number(it.qty) || 0) : '—'}
-              </span>
-              <button className="mrs-btn mrs-btn-danger" onClick={() => remove(idx)} style={{ padding: 8 }}><Trash2 size={15} /></button>
+        <div style={{ overflowX: 'auto' }}>
+          <div style={{ minWidth: 760 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: GRID, gap: 6, marginBottom: 4 }}>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>프로젝트</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목명</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>대</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>중</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>낱개</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>= 총(낱개)</span>
+              <span></span>
             </div>
-            );
-          })}
-        </>
+            {draft.map((it, idx) => {
+              const cat = findCatalogItem(catalog, it.itemName, it.itemSpec, it.itemColor);
+              const hasMid = cat && cat.midUnit && Number(cat.factor2) > 0;
+              const hasBig = cat && cat.bigUnit && Number(cat.factor1) > 0;
+              const baseUnit = cat ? cat.unit : (it.unit || 'EA');
+              const specs = catalogSpecs(catalog, it.itemName);
+              return (
+              <div key={it.id} style={{ display: 'grid', gridTemplateColumns: GRID, gap: 6, marginBottom: 6, alignItems: 'center' }}>
+                <select className="mrs-select" value={it.projectId} onChange={e => recalc(idx, { projectId: e.target.value })}>
+                  {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+                <select className="mrs-select" value={it.itemName} onChange={e => changeName(idx, e.target.value)}>
+                  {names.map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+                <select className="mrs-select" value={it.itemSpec} onChange={e => changeSpec(idx, e.target.value)}>
+                  {specs.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                {hasBig ? (
+                  <div><div style={{ fontSize: 9, color: 'var(--ink-soft)' }}>{cat.bigUnit}</div><input className="mrs-input" type="number" min="0" value={it.big} onChange={e => recalc(idx, { big: e.target.value })} /></div>
+                ) : <div><div style={{ fontSize: 9, color: 'var(--ink-soft)', opacity: 0.3 }}>—</div><input className="mrs-input" disabled style={{ background: '#EDEAE2' }} /></div>}
+                {hasMid ? (
+                  <div><div style={{ fontSize: 9, color: 'var(--ink-soft)' }}>{cat.midUnit}</div><input className="mrs-input" type="number" min="0" value={it.mid} onChange={e => recalc(idx, { mid: e.target.value })} /></div>
+                ) : <div><div style={{ fontSize: 9, color: 'var(--ink-soft)', opacity: 0.3 }}>—</div><input className="mrs-input" disabled style={{ background: '#EDEAE2' }} /></div>}
+                <div><div style={{ fontSize: 9, color: 'var(--ink-soft)' }}>{baseUnit}</div><input className="mrs-input" type="number" min="0" value={it.small} onChange={e => recalc(idx, { small: e.target.value })} /></div>
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)' }}>{(Number(it.qty) || 0).toLocaleString()} {baseUnit}</span>
+                <button className="mrs-btn mrs-btn-danger" onClick={() => remove(idx)} style={{ padding: 8 }}><Trash2 size={15} /></button>
+              </div>
+              );
+            })}
+          </div>
+        </div>
       )}
-      <button className="mrs-btn mrs-btn-primary" style={{ marginTop: 10 }} disabled={saving || draft.some(it => !it.itemName?.trim() || !it.itemSpec?.trim() || !it.projectId)} onClick={() => onSave(draft)}><Save size={15} /> 전체 저장</button>
+      <button className="mrs-btn mrs-btn-primary" style={{ marginTop: 10 }} disabled={saving || draft.some(it => !it.itemName || !it.itemSpec || !it.projectId)} onClick={handleSave}><Save size={15} /> 전체 저장</button>
     </div>
   );
 }
