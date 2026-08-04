@@ -79,19 +79,44 @@ function isToday(iso) {
 function catalogNames(catalog) { return [...new Set(catalog.map(c => c.name))]; }
 function catalogSpecs(catalog, name) { return [...new Set(catalog.filter(c => c.name === name).map(c => c.spec))]; }
 function catalogColors(catalog, name, spec) { return [...new Set(catalog.filter(c => c.name === name && c.spec === spec).map(c => c.color))]; }
+function findCatalogItem(catalog, name, spec, color) {
+  return catalog.find(c => c.name === name && c.spec === spec && c.color === color)
+    || catalog.find(c => c.name === name && c.spec === spec)
+    || null;
+}
 function catalogUnit(catalog, name, spec, color) {
-  const found = catalog.find(c => c.name === name && c.spec === spec && c.color === color);
+  const found = findCatalogItem(catalog, name, spec, color);
   return found ? found.unit : 'EA';
 }
+
+// 환산 계산: 대단위/중단위/낱개 → 낱개 총합
+// 총합(낱개) = big*factor1*factor2 + mid*factor2 + small   (factor2 없으면 big*factor1 + small)
+function convertToBase(catItem, big, mid, small) {
+  const b = Number(big) || 0, m = Number(mid) || 0, s = Number(small) || 0;
+  if (!catItem) return s;
+  const f1 = Number(catItem.factor1) || 0;
+  const f2 = Number(catItem.factor2) || 0;
+  const hasMid = catItem.midUnit && f2 > 0;      // 3단계 (타→본→M)
+  const hasBig = catItem.bigUnit && f1 > 0;       // 대단위 존재
+  if (hasMid) {
+    // 무나사전선관: 타/본/M, big*f1*f2 + mid*f2 + small
+    return b * f1 * f2 + m * f2 + s;
+  }
+  if (hasBig) {
+    // 커플링/통신케이블: big*f1 + small
+    return b * f1 + s;
+  }
+  // 내화케이블: M 단독
+  return s;
+}
+
 function newItemRow(catalog) {
-  if (catalog.length === 0) return { id: genId(), name: '', spec: '', color: 'N/A', qty: '', unit: 'EA' };
+  if (catalog.length === 0) return { id: genId(), name: '', spec: '', color: 'N/A', big: '', mid: '', small: '', qty: 0, unit: 'EA' };
   const name = catalogNames(catalog)[0];
   const spec = catalogSpecs(catalog, name)[0];
   const color = catalogColors(catalog, name, spec)[0];
-  const catUnit = catalogUnit(catalog, name, spec, color);
-  const allowed = unitsForItem(name);
-  const unit = allowed.includes(catUnit) ? catUnit : allowed[0];
-  return { id: genId(), name, spec, color, qty: '', unit };
+  const cat = findCatalogItem(catalog, name, spec, color);
+  return { id: genId(), name, spec, color, big: '', mid: '', small: '', qty: 0, unit: cat ? cat.unit : 'EA' };
 }
 
 // ── 글로벌 CSS ──────────────────────────────────────────
@@ -328,37 +353,64 @@ function ItemRowEditor({ item, catalog, onChange, onRemove, removable }) {
   const names = catalogNames(catalog);
   const specs = catalogSpecs(catalog, item.name);
   const colors = catalogColors(catalog, item.name, item.spec);
+  const cat = findCatalogItem(catalog, item.name, item.spec, item.color);
 
+  const hasMid = cat && cat.midUnit && (Number(cat.factor2) || 0) > 0;
+  const hasBig = cat && cat.bigUnit && (Number(cat.factor1) || 0) > 0;
+  const baseUnit = cat ? cat.unit : (item.unit || 'EA');
+
+  function recalc(next) {
+    const c = findCatalogItem(catalog, next.name, next.spec, next.color);
+    const total = convertToBase(c, next.big, next.mid, next.small);
+    onChange({ ...next, qty: total, unit: c ? c.unit : (next.unit || 'EA') });
+  }
   function handleNameChange(name) {
     const spec = catalogSpecs(catalog, name)[0] || '';
     const color = catalogColors(catalog, name, spec)[0] || 'N/A';
-    const catUnit = catalogUnit(catalog, name, spec, color);
-    const allowed = unitsForItem(name);
-    const unit = allowed.includes(catUnit) ? catUnit : allowed[0];
-    onChange({ ...item, name, spec, color, unit });
+    recalc({ ...item, name, spec, color, big: '', mid: '', small: '' });
   }
   function handleSpecChange(spec) {
     const color = catalogColors(catalog, item.name, spec)[0] || 'N/A';
-    const catUnit = catalogUnit(catalog, item.name, spec, color);
-    const allowed = unitsForItem(item.name);
-    const unit = allowed.includes(catUnit) ? catUnit : allowed[0];
-    onChange({ ...item, spec, color, unit });
+    recalc({ ...item, spec, color, big: '', mid: '', small: '' });
   }
-  function handleColorChange(color) {
-    const catUnit = catalogUnit(catalog, item.name, item.spec, color);
-    const allowed = unitsForItem(item.name);
-    const unit = allowed.includes(catUnit) ? catUnit : allowed[0];
-    onChange({ ...item, color, unit });
-  }
+  function handleColorChange(color) { recalc({ ...item, color }); }
 
   return (
-    <div className="mrs-item-row">
-      <div><select className="mrs-select" value={item.name} onChange={e => handleNameChange(e.target.value)}>{names.length === 0 ? <option value="">품목 없음</option> : names.map(n => <option key={n} value={n}>{n}</option>)}</select></div>
-      <div><select className="mrs-select" value={item.spec} onChange={e => handleSpecChange(e.target.value)}>{specs.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
-      <div><input className="mrs-input" type="number" min="0" value={item.qty} onChange={e => onChange({ ...item, qty: e.target.value })} placeholder="0" /></div>
-      <div><select className="mrs-select" value={item.unit} onChange={e => onChange({ ...item, unit: e.target.value })}>{unitsForItem(item.name).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
-      <div><select className="mrs-select" value={item.color} onChange={e => handleColorChange(e.target.value)} disabled={colors.length <= 1}>{colors.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-      <button className="mrs-btn mrs-btn-danger" onClick={onRemove} disabled={!removable} title="삭제" style={{ padding: 8 }}><Trash2 size={16} /></button>
+    <div className="mrs-card" style={{ padding: 12, marginBottom: 8, background: '#F7F5EF' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 0.9fr auto', gap: 6, marginBottom: 8, alignItems: 'end' }}>
+        <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목</span><select className="mrs-select" value={item.name} onChange={e => handleNameChange(e.target.value)}>{names.length === 0 ? <option value="">품목 없음</option> : names.map(n => <option key={n} value={n}>{n}</option>)}</select></div>
+        <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span><select className="mrs-select" value={item.spec} onChange={e => handleSpecChange(e.target.value)}>{specs.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
+        <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span><select className="mrs-select" value={item.color} onChange={e => handleColorChange(e.target.value)} disabled={colors.length <= 1}>{colors.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+        <button className="mrs-btn mrs-btn-danger" onClick={onRemove} disabled={!removable} title="삭제" style={{ padding: 8 }}><Trash2 size={16} /></button>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        {hasBig && (
+          <div style={{ width: 80 }}>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>{cat.bigUnit}</span>
+            <input className="mrs-input" type="number" min="0" value={item.big} onChange={e => recalc({ ...item, big: e.target.value })} placeholder="0" />
+          </div>
+        )}
+        {hasMid && (
+          <div style={{ width: 80 }}>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>{cat.midUnit}</span>
+            <input className="mrs-input" type="number" min="0" value={item.mid} onChange={e => recalc({ ...item, mid: e.target.value })} placeholder="0" />
+          </div>
+        )}
+        <div style={{ width: 80 }}>
+          <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>{baseUnit}</span>
+          <input className="mrs-input" type="number" min="0" value={item.small} onChange={e => recalc({ ...item, small: e.target.value })} placeholder="0" />
+        </div>
+        <div style={{ flex: 1, textAlign: 'right', minWidth: 90 }}>
+          <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>= 총 {baseUnit}</span>
+          <div className="mrs-mono" style={{ fontSize: 18, fontWeight: 700, color: 'var(--accent)' }}>{(Number(item.qty) || 0).toLocaleString()}</div>
+        </div>
+      </div>
+      {(hasBig || hasMid) && (
+        <div style={{ fontSize: 10, color: 'var(--ink-soft)', marginTop: 4 }}>
+          {hasMid ? `1${cat.bigUnit} = ${cat.factor1}${cat.midUnit}, 1${cat.midUnit} = ${cat.factor2}${baseUnit}` : hasBig ? `1${cat.bigUnit} = ${cat.factor1}${baseUnit}` : ''}
+        </div>
+      )}
     </div>
   );
 }
@@ -426,7 +478,7 @@ function RequestForm({ session, projectName, catalog, zones, onSubmit, saving })
     const effZone = zone || zoneNames[0] || '';
     if (!effFloor || !effRoom || !effZone) { alert('구역을 모두 선택해주세요. 관리자에게 구역 등록을 요청하세요.'); return; }
     if (catalog.length === 0) { alert('품목이 등록되어 있지 않습니다.'); return; }
-    const valid = items.filter(it => it.name && it.qty !== '' && Number(it.qty) > 0);
+    const valid = items.filter(it => it.name && Number(it.qty) > 0);
     if (valid.length === 0) { alert('최소 1개 이상의 품목에 수량을 입력해주세요.'); return; }
     const zoneName = `${effFloor} · ${effRoom} · ${effZone}`;
     const payload = {
@@ -485,14 +537,6 @@ function RequestForm({ session, projectName, catalog, zones, onSubmit, saving })
         </div>
       ) : (
         <>
-          <div className="mrs-item-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목</span>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>수량</span>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>단위</span>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span>
-            <span></span>
-          </div>
           {items.map(it => <ItemRowEditor key={it.id} item={it} catalog={catalog} onChange={u => updateItem(it.id, u)} onRemove={() => removeItem(it.id)} removable={items.length > 1} />)}
           <button className="mrs-btn mrs-btn-ghost" style={{ marginTop: 10 }} onClick={addItem}><Plus size={15} /> 품목 추가</button>
         </>
@@ -618,7 +662,7 @@ function ReturnPanel({ session, projectName, catalog, zones, returns, onSubmit, 
     const effZone = zone || zoneNames[0] || '';
     if (!effFloor || !effRoom || !effZone) { alert('구역을 모두 선택해주세요.'); return; }
     if (catalog.length === 0) { alert('품목이 등록되어 있지 않습니다.'); return; }
-    const valid = items.filter(it => it.name && it.qty !== '' && Number(it.qty) > 0);
+    const valid = items.filter(it => it.name && Number(it.qty) > 0);
     if (valid.length === 0) { alert('최소 1개 이상의 품목에 수량을 입력해주세요.'); return; }
     const zoneName = `${effFloor} · ${effRoom} · ${effZone}`;
     const payload = {
@@ -685,14 +729,6 @@ function ReturnPanel({ session, projectName, catalog, zones, returns, onSubmit, 
           </div>
         ) : (
           <>
-            <div className="mrs-item-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
-              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목</span>
-              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
-              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>수량</span>
-              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>단위</span>
-              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span>
-              <span></span>
-            </div>
             {items.map(it => <ItemRowEditor key={it.id} item={it} catalog={catalog} onChange={u => updateItem(it.id, u)} onRemove={() => removeItem(it.id)} removable={items.length > 1} />)}
             <button className="mrs-btn mrs-btn-ghost" style={{ marginTop: 10 }} onClick={addItem}><Plus size={15} /> 품목 추가</button>
           </>
@@ -1104,17 +1140,19 @@ function CatalogManager({ catalog, onSave, saving }) {
   const fileRef = useRef(null);
   useEffect(() => setDraft(catalog), [catalog]);
 
-  function addRow() { setDraft([...draft, { id: genId('cat'), name: '', spec: '', color: 'N/A', unit: 'EA' }]); }
+  function addRow() { setDraft([...draft, { id: genId('cat'), name: '', spec: '', color: 'N/A', unit: 'EA', bigUnit: '', midUnit: '', factor1: 0, factor2: 0 }]); }
   function remove(idx) { setDraft(draft.filter((_, i) => i !== idx)); }
   function update(idx, field, val) { const next = [...draft]; next[idx] = { ...next[idx], [field]: val }; setDraft(next); }
 
   function downloadTemplate() {
     const rows = [
-      { '품목명': '무나사전선관', '규격': 'E19', '색상': 'N/A', '단위': '본' },
-      { '품목명': '통신케이블', '규격': '14TP', '색상': '적', '단위': '롤' },
+      { '품목명': '무나사전선관', '규격': 'E19', '색상': 'N/A', '낱개단위': 'M', '대단위': '타', '중단위': '본', '1대=중': 127, '1중=낱개': 3.6 },
+      { '품목명': '커플링', '규격': 'E19', '색상': 'N/A', '낱개단위': 'EA', '대단위': 'BOX', '중단위': '', '1대=중': 120, '1중=낱개': '' },
+      { '품목명': '통신케이블', '규격': '14AWGx1P,TP(적)', '색상': '적', '낱개단위': 'M', '대단위': '롤', '중단위': '', '1대=중': 300, '1중=낱개': '' },
+      { '품목명': '내화케이블', '규격': '4mm2,03C', '색상': 'N/A', '낱개단위': 'M', '대단위': '', '중단위': '', '1대=중': '', '1중=낱개': '' },
     ];
     const ws = XLSX.utils.json_to_sheet(rows);
-    ws['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 8 }, { wch: 8 }];
+    ws['!cols'] = [{ wch: 16 }, { wch: 20 }, { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '품목');
     XLSX.writeFile(wb, '품목_업로드_양식.xlsx');
@@ -1134,7 +1172,11 @@ function CatalogManager({ catalog, onSave, saving }) {
           name: String(row['품목명'] || row['품목'] || '').trim(),
           spec: String(row['규격'] || '').trim(),
           color: String(row['색상'] || 'N/A').trim() || 'N/A',
-          unit: String(row['단위'] || 'EA').trim() || 'EA',
+          unit: String(row['낱개단위'] || row['단위'] || 'EA').trim() || 'EA',
+          bigUnit: String(row['대단위'] || '').trim(),
+          midUnit: String(row['중단위'] || '').trim(),
+          factor1: Number(row['1대=중'] || 0) || 0,
+          factor2: Number(row['1중=낱개'] || 0) || 0,
         })).filter(it => it.name && it.spec);
         if (parsed.length === 0) { alert('업로드할 데이터가 없습니다.'); return; }
         if (confirm(`${parsed.length}건의 품목을 추가할까요? (기존 품목은 유지됩니다)`)) {
@@ -1146,10 +1188,18 @@ function CatalogManager({ catalog, onSave, saving }) {
     e.target.value = '';
   }
 
+  const GRID = '1.4fr 1.2fr 0.7fr 0.7fr 0.6fr 0.6fr 0.7fr 0.7fr auto';
+
   return (
     <div className="mrs-card" style={{ padding: 18, marginBottom: 20 }}>
       <h3 className="mrs-display" style={{ fontSize: 15, margin: '0 0 12px', fontWeight: 600 }}><Package size={15} style={{ verticalAlign: -2 }} /> 품목 관리</h3>
-      <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 10 }}>색상이 없는 품목은 N/A로 두세요.</div>
+      <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 6 }}>색상 없으면 N/A. 단위 환산: 낱개단위(M/EA)가 기준, 대단위(타/BOX/롤)·중단위(본)와 계수 입력.</div>
+      <div style={{ fontSize: 11, color: 'var(--ink-soft)', marginBottom: 10, lineHeight: 1.5 }}>
+        · 무나사전선관: 대=타, 중=본, 1대=중 127, 1중=낱개 3.6<br />
+        · 커플링/박스커넥터: 대=BOX, 1대=중(=낱개) 120 등, 중단위 비움<br />
+        · 통신케이블: 대=롤, 1대=중 300<br />
+        · 내화케이블: 대/중 비움 (M 단독)
+      </div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
         <button className="mrs-btn mrs-btn-ghost" onClick={addRow}><Plus size={15} /> 품목 추가</button>
         <button className="mrs-btn mrs-btn-primary" onClick={() => fileRef.current?.click()}><Download size={15} style={{ transform: 'rotate(180deg)' }} /> 엑셀 업로드</button>
@@ -1160,26 +1210,36 @@ function CatalogManager({ catalog, onSave, saving }) {
       {draft.length === 0 ? (
         <div style={{ fontSize: 13, color: 'var(--ink-soft)', padding: '10px 0' }}>등록된 품목이 없습니다.</div>
       ) : (
-        <>
-          <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 0.8fr 0.8fr auto', gap: 6, marginBottom: 4 }}>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목명</span>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>단위</span>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span>
-            <span></span>
-          </div>
-          {draft.map((it, idx) => (
-            <div key={it.id} style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 0.8fr 0.8fr auto', gap: 6, marginBottom: 6, alignItems: 'center' }}>
-              <input className="mrs-input" value={it.name} onChange={e => update(idx, 'name', e.target.value)} placeholder="무나사전선관" />
-              <input className="mrs-input" value={it.spec} onChange={e => update(idx, 'spec', e.target.value)} placeholder="E19" />
-              <select className="mrs-select" value={it.unit} onChange={e => update(idx, 'unit', e.target.value)}>
-                {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-              </select>
-              <input className="mrs-input" value={it.color} onChange={e => update(idx, 'color', e.target.value)} placeholder="N/A" />
-              <button className="mrs-btn mrs-btn-danger" onClick={() => remove(idx)} style={{ padding: 8 }}><Trash2 size={15} /></button>
+        <div style={{ overflowX: 'auto' }}>
+          <div style={{ minWidth: 720 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: GRID, gap: 5, marginBottom: 4 }}>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목명</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>낱개</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>대단위</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>중단위</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>1대=중</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>1중=낱개</span>
+              <span></span>
             </div>
-          ))}
-        </>
+            {draft.map((it, idx) => (
+              <div key={it.id} style={{ display: 'grid', gridTemplateColumns: GRID, gap: 5, marginBottom: 6, alignItems: 'center' }}>
+                <input className="mrs-input" value={it.name} onChange={e => update(idx, 'name', e.target.value)} placeholder="무나사전선관" />
+                <input className="mrs-input" value={it.spec} onChange={e => update(idx, 'spec', e.target.value)} placeholder="E19" />
+                <select className="mrs-select" value={it.unit} onChange={e => update(idx, 'unit', e.target.value)}>
+                  {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                </select>
+                <input className="mrs-input" value={it.color} onChange={e => update(idx, 'color', e.target.value)} placeholder="N/A" />
+                <input className="mrs-input" value={it.bigUnit || ''} onChange={e => update(idx, 'bigUnit', e.target.value)} placeholder="타" />
+                <input className="mrs-input" value={it.midUnit || ''} onChange={e => update(idx, 'midUnit', e.target.value)} placeholder="본" />
+                <input className="mrs-input" type="number" min="0" value={it.factor1 || ''} onChange={e => update(idx, 'factor1', e.target.value)} placeholder="127" />
+                <input className="mrs-input" type="number" min="0" step="0.1" value={it.factor2 || ''} onChange={e => update(idx, 'factor2', e.target.value)} placeholder="3.6" />
+                <button className="mrs-btn mrs-btn-danger" onClick={() => remove(idx)} style={{ padding: 8 }}><Trash2 size={15} /></button>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
       <button className="mrs-btn mrs-btn-primary" style={{ marginTop: 10 }} disabled={saving || draft.some(it => !it.name.trim() || !it.spec.trim())} onClick={() => onSave(draft)}><Save size={15} /> 전체 저장</button>
     </div>
@@ -1187,7 +1247,7 @@ function CatalogManager({ catalog, onSave, saving }) {
 }
 
 // ── 관리 설정: 보유물량 (프로젝트+품목+규격+색상 + 엑셀 업로드) ──
-function StockManager({ stock, projects, onSave, saving }) {
+function StockManager({ stock, catalog, projects, onSave, saving }) {
   const [draft, setDraft] = useState(stock);
   const fileRef = useRef(null);
   useEffect(() => setDraft(stock), [stock]);
@@ -1198,11 +1258,12 @@ function StockManager({ stock, projects, onSave, saving }) {
 
   function downloadTemplate() {
     const rows = [
-      { '프로젝트명': 'P5 Ph1 (삼성물산)', '품목명': '무나사전선관', '규격': 'E19', '색상': 'N/A', '단위': '본', '수량': 500 },
-      { '프로젝트명': 'P5 Ph1 (삼성물산)', '품목명': '통신케이블', '규격': '14TP', '색상': '적', '단위': '롤', '수량': 10 },
+      { '프로젝트명': 'P5 Ph1 (삼성물산)', '품목명': '무나사전선관', '규격': 'E19', '색상': 'N/A', '대단위수량': 10, '중단위수량': 35, '낱개수량': 0 },
+      { '프로젝트명': 'P5 Ph1 (삼성물산)', '품목명': '커플링', '규격': 'E19', '색상': 'N/A', '대단위수량': 10, '중단위수량': 0, '낱개수량': 2 },
+      { '프로젝트명': 'P5 Ph1 (삼성물산)', '품목명': '내화케이블', '규격': '4mm2,03C', '색상': 'N/A', '대단위수량': 0, '중단위수량': 0, '낱개수량': 141 },
     ];
     const ws = XLSX.utils.json_to_sheet(rows);
-    ws['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 10 }];
+    ws['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 18 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '보유물량');
     XLSX.writeFile(wb, '보유물량_업로드_양식.xlsx');
@@ -1219,15 +1280,26 @@ function StockManager({ stock, projects, onSave, saving }) {
         const rows = XLSX.utils.sheet_to_json(ws);
         const projectByName = {};
         projects.forEach(p => { projectByName[p.name] = p.id; });
-        const parsed = rows.map(row => ({
-          id: genId('stock'),
-          projectId: projectByName[String(row['프로젝트명'] || row['프로젝트'] || '').trim()] || projects[0]?.id || '',
-          itemName: String(row['품목명'] || row['품목'] || '').trim(),
-          itemSpec: String(row['규격'] || '').trim(),
-          itemColor: String(row['색상'] || 'N/A').trim() || 'N/A',
-          unit: String(row['단위'] || 'EA').trim() || 'EA',
-          qty: Number(row['수량'] || row['보유물량'] || 0) || 0,
-        })).filter(it => it.itemName && it.itemSpec);
+        const parsed = rows.map(row => {
+          const itemName = String(row['품목명'] || row['품목'] || '').trim();
+          const itemSpec = String(row['규격'] || '').trim();
+          const itemColor = String(row['색상'] || 'N/A').trim() || 'N/A';
+          const cat = findCatalogItem(catalog, itemName, itemSpec, itemColor);
+          // 대/중/낱개 수량이 있으면 환산, 없으면 단순 수량
+          let qty;
+          if (row['대단위수량'] !== undefined || row['중단위수량'] !== undefined || row['낱개수량'] !== undefined) {
+            qty = convertToBase(cat, row['대단위수량'], row['중단위수량'], row['낱개수량']);
+          } else {
+            qty = Number(row['수량'] || row['보유물량'] || 0) || 0;
+          }
+          return {
+            id: genId('stock'),
+            projectId: projectByName[String(row['프로젝트명'] || row['프로젝트'] || '').trim()] || projects[0]?.id || '',
+            itemName, itemSpec, itemColor,
+            unit: cat ? cat.unit : String(row['단위'] || 'EA').trim() || 'EA',
+            qty,
+          };
+        }).filter(it => it.itemName && it.itemSpec);
         if (parsed.length === 0) { alert('업로드할 데이터가 없습니다.'); return; }
         if (confirm(`${parsed.length}건의 보유물량을 추가할까요? (기존 항목은 유지됩니다)`)) {
           setDraft([...draft, ...parsed]);
@@ -1241,7 +1313,8 @@ function StockManager({ stock, projects, onSave, saving }) {
   return (
     <div className="mrs-card" style={{ padding: 18, marginBottom: 20 }}>
       <h3 className="mrs-display" style={{ fontSize: 15, margin: '0 0 12px', fontWeight: 600 }}><Package size={15} style={{ verticalAlign: -2 }} /> 보유물량 관리</h3>
-      <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 10 }}>프로젝트별 품목/규격/색상 단위로 초기 보유물량을 등록합니다. 재고 = 보유물량 − 팀장 입고확인 수량.</div>
+      <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 4 }}>재고 = 보유물량 − 팀장 입고확인 수량. 수량은 낱개(M/EA) 기준으로 저장됩니다.</div>
+      <div style={{ fontSize: 11, color: 'var(--ink-soft)', marginBottom: 10 }}>엑셀 업로드 시 대단위/중단위/낱개 수량을 넣으면 품목관리 계수로 자동 환산됩니다 (예: 무나사전선관 10타+35본 → 4,698M).</div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
         <button className="mrs-btn mrs-btn-ghost" onClick={addRow}><Plus size={15} /> 항목 추가</button>
         <button className="mrs-btn mrs-btn-primary" onClick={() => fileRef.current?.click()}><Download size={15} style={{ transform: 'rotate(180deg)' }} /> 엑셀 업로드</button>
@@ -1259,7 +1332,7 @@ function StockManager({ stock, projects, onSave, saving }) {
             <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
             <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span>
             <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>단위</span>
-            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>수량</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>수량(낱개)</span>
             <span></span>
           </div>
           {draft.map((it, idx) => (
@@ -1493,7 +1566,7 @@ function AdminApp({ session, requests, returns, projects, users, zones, catalog,
           <ProjectManager projects={projects} onSave={onSaveProjects} saving={savingSettings} />
           <ZoneManager zones={zones} projects={projects} onSave={onSaveZones} saving={savingSettings} />
           <CatalogManager catalog={catalog} onSave={onSaveCatalog} saving={savingSettings} />
-          <StockManager stock={stock} projects={projects} onSave={onSaveStock} saving={savingSettings} />
+          <StockManager stock={stock} catalog={catalog} projects={projects} onSave={onSaveStock} saving={savingSettings} />
           <StaffManager users={users} projects={projects} onAdd={onAddUser} onUpdate={onUpdateUser} onDelete={onDeleteUser} saving={savingSettings} />
           <AdminAccountManager session={session} onUpdate={onUpdateUser} saving={savingSettings} />
         </div>
