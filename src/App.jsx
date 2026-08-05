@@ -127,6 +127,15 @@ function computeStockRemain(stock, requests, projectId, name, spec, color) {
   return (Number(stockItem.qty) || 0) - delivered;
 }
 
+// 요청/반출 품목 1개를 대단위+낱개로 표시하는 문자열 (예: "5타 18본 (2,358 M)")
+function formatItemQty(catalog, name, spec, color, qty, unit) {
+  const cat = findCatalogItem(catalog, name, spec, color);
+  const base = Number(qty) || 0;
+  const conv = cat && ((cat.bigUnit && Number(cat.factor1) > 0) || (cat.midUnit && Number(cat.factor2) > 0));
+  const big = formatStockByUnit(cat, base);
+  return { big, baseStr: `${base.toLocaleString()} ${unit || (cat ? cat.unit : 'EA')}`, conv };
+}
+
 // ── 카탈로그 유틸 ─────────────────────────────────────────
 function catalogNames(catalog) { return [...new Set(catalog.map(c => c.name))]; }
 function catalogSpecs(catalog, name) { return [...new Set(catalog.filter(c => c.name === name).map(c => c.spec))]; }
@@ -337,7 +346,7 @@ function ensurePdfFont(doc) {
   doc.setFont('NanumGothic');
 }
 
-function generateDocPdf({ title, docNo, dateStr, projectName, zoneStr, items, deliverLabel, deliverName, deliverSignature, receiveLabel, receiveName, receiveSignature }) {
+function generateDocPdf({ title, docNo, dateStr, projectName, zoneStr, items, catalog = [], deliverLabel, deliverName, deliverSignature, receiveLabel, receiveName, receiveSignature }) {
   const doc = new jsPDF({ unit: 'mm', format: 'a5' });
   // 한글 폰트를 매 인스턴스마다 등록
   doc.addFileToVFS('NanumGothic.ttf', NanumGothicBase64);
@@ -378,8 +387,22 @@ function generateDocPdf({ title, docNo, dateStr, projectName, zoneStr, items, de
     doc.text(String(it.name || ''), 14, y);
     doc.text(String(it.spec || '-'), 55, y);
     doc.text(String(it.color || '-'), 85, y);
-    doc.text(`${it.qty} ${it.unit}`, pw - 14, y, { align: 'right' });
-    y += 6;
+    const cat = findCatalogItem(catalog, it.name, it.spec, it.color);
+    const conv = cat && ((cat.bigUnit && Number(cat.factor1) > 0) || (cat.midUnit && Number(cat.factor2) > 0));
+    if (conv) {
+      const bigStr = formatStockByUnit(cat, it.qty);
+      doc.text(bigStr, pw - 14, y, { align: 'right' });
+      doc.setFontSize(7);
+      doc.setTextColor(130);
+      y += 3.5;
+      doc.text(`(${(Number(it.qty)||0).toLocaleString()} ${it.unit})`, pw - 14, y, { align: 'right' });
+      doc.setTextColor(0);
+      doc.setFontSize(9);
+      y += 6;
+    } else {
+      doc.text(`${it.qty} ${it.unit}`, pw - 14, y, { align: 'right' });
+      y += 6;
+    }
   });
   y += 6;
 
@@ -589,7 +612,7 @@ function RequestForm({ session, projectName, catalog, stock, requests, onSubmit,
 }
 
 // ── 팀장: 요청리스트 (본인 요청 조회 + 삭제 + 입고확인 + PDF) ──
-function MyRequestList({ requests, session, projects, onConfirmReceipt, onDelete, saving }) {
+function MyRequestList({ requests, session, projects, catalog = [], onConfirmReceipt, onDelete, saving }) {
   const [confirmingReqId, setConfirmingReqId] = useState(null);
   const projectNameById = {};
   projects.forEach(p => { projectNameById[p.id] = p.name; });
@@ -612,7 +635,7 @@ function MyRequestList({ requests, session, projects, onConfirmReceipt, onDelete
     generateDocPdf({
       title: '거래명세표', docNo: r.reqNo, dateStr: fmtDate(r.confirmedAt || r.createdAt),
       projectName: projectNameById[r.projectId], zoneStr: r.zoneName,
-      items: r.items, deliverLabel: '인도자 (자재팀)', deliverName: r.deliverName, deliverSignature: r.deliverSignature,
+      items: r.items, catalog, deliverLabel: '인도자 (자재팀)', deliverName: r.deliverName, deliverSignature: r.deliverSignature,
       receiveLabel: '인수자 (현장팀장)', receiveName: r.receiveName, receiveSignature: r.receiveSignature,
     });
   }
@@ -629,12 +652,19 @@ function MyRequestList({ requests, session, projects, onConfirmReceipt, onDelete
             <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{fmtDate(r.createdAt)}</span>
           </div>
           {r.note && <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 10 }}>{r.note}</div>}
-          {r.items.map(it => (
-            <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px dashed var(--paper-line)' }}>
-              <span style={{ fontSize: 13 }}><b>{it.name}</b> {it.spec}{it.color && it.color !== 'N/A' ? ` ${it.color}` : ''} · {it.qty}{it.unit}</span>
+          {r.items.map(it => {
+            const q = formatItemQty(catalog, it.name, it.spec, it.color, it.qty, it.unit);
+            return (
+            <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px dashed var(--paper-line)' }}>
+              <span style={{ fontSize: 13 }}>
+                <b>{it.name}</b> {it.spec}{it.color && it.color !== 'N/A' ? ` ${it.color}` : ''}
+                <span style={{ fontWeight: 700, color: 'var(--accent)', marginLeft: 6 }}>{q.big}</span>
+                {q.conv && <span style={{ fontSize: 11, color: 'var(--ink-soft)' }}> ({q.baseStr})</span>}
+              </span>
               <StatusBadge value={it.status} />
             </div>
-          ))}
+            );
+          })}
 
           <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
             {allRequested(r) && (
@@ -699,7 +729,7 @@ function ReturnPanel({ session, projectName, catalog, returns, onSubmit, saving 
     generateDocPdf({
       title: '반출확인서', docNo: r.reqNo, dateStr: fmtDate(r.confirmedAt || r.createdAt),
       projectName, zoneStr: r.zoneName,
-      items: r.items, deliverLabel: '인도자 (현장팀장)', deliverName: r.deliverName, deliverSignature: r.deliverSignature,
+      items: r.items, catalog, deliverLabel: '인도자 (현장팀장)', deliverName: r.deliverName, deliverSignature: r.deliverSignature,
       receiveLabel: '인수자 (자재팀)', receiveName: r.receiveName, receiveSignature: r.receiveSignature,
     });
   }
@@ -752,9 +782,12 @@ function ReturnPanel({ session, projectName, catalog, returns, onSubmit, saving 
             <StatusBadge value={r.status} />
           </div>
           {r.reason && <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>{r.reason}</div>}
-          {r.items.map(it => (
-            <div key={it.id} style={{ fontSize: 13, padding: '3px 0' }}>{it.name} {it.spec} · {it.qty}{it.unit}</div>
-          ))}
+          {r.items.map(it => {
+            const q = formatItemQty(catalog, it.name, it.spec, it.color, it.qty, it.unit);
+            return (
+            <div key={it.id} style={{ fontSize: 13, padding: '3px 0' }}>{it.name} {it.spec} <span style={{ fontWeight: 700, color: 'var(--accent)' }}>{q.big}</span>{q.conv && <span style={{ fontSize: 11, color: 'var(--ink-soft)' }}> ({q.baseStr})</span>}</div>
+            );
+          })}
           {r.status === '반출확인완료' && (
             <button className="mrs-btn mrs-btn-ghost" style={{ marginTop: 10 }} onClick={() => downloadPdf(r)}><Download size={15} /> 반출확인서 다운로드</button>
           )}
@@ -778,15 +811,15 @@ function LeaderApp({ session, requests, returns, projects, catalog, stock, onSub
         <button className={`mrs-tab ${tab === 'returnlist' ? 'active' : ''}`} onClick={() => setTab('returnlist')}><CalendarDays size={16} /> 반출리스트</button>
       </div>
       {tab === 'form' && <RequestForm session={session} projectName={projectName} catalog={catalog} stock={stock} requests={requests} onSubmit={onSubmit} saving={saving} />}
-      {tab === 'mylist' && <MyRequestList requests={requests} session={session} projects={projects} onConfirmReceipt={onConfirmReceipt} onDelete={onDeleteRequest} saving={saving} />}
+      {tab === 'mylist' && <MyRequestList requests={requests} session={session} projects={projects} catalog={catalog} onConfirmReceipt={onConfirmReceipt} onDelete={onDeleteRequest} saving={saving} />}
       {tab === 'return' && <ReturnPanel session={session} projectName={projectName} catalog={catalog} returns={returns} onSubmit={onSubmitReturn} saving={saving} />}
-      {tab === 'returnlist' && <ReturnsTable returns={myReturns} projects={projects} />}
+      {tab === 'returnlist' && <ReturnsTable returns={myReturns} projects={projects} catalog={catalog} />}
     </div>
   );
 }
 
 // ── 누계요청리스트 (관리자/자재팀 공용) ─────────────────────
-function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, allowPdf, role }) {
+function RequestsTable({ requests, projects, catalog = [], onUpdateStatus, onDelete, scope, allowPdf, role }) {
   const [projectFilter, setProjectFilter] = useState('전체');
   const [statusFilter, setStatusFilter] = useState('전체');
   const [dateFrom, setDateFrom] = useState('');
@@ -823,10 +856,11 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, al
     const data = filtered.map(r => ({
       '프로젝트': r.projectName, '요청번호': r.reqNo, '요청일시': fmtDate(r.createdAt), '요청자': r.requester,
       '품목명': r.name, '규격': r.spec, '색상': r.color,
-      '수량': r.qty, '단위': r.unit, '상태': r.status, '특이사항': r.note || '',
+      '수량(대단위)': formatStockByUnit(findCatalogItem(catalog, r.name, r.spec, r.color), r.qty),
+      '수량(낱개)': r.qty, '단위': r.unit, '상태': r.status, '특이사항': r.note || '',
     }));
     const ws = XLSX.utils.json_to_sheet(data);
-    ws['!cols'] = [{wch:16},{wch:18},{wch:16},{wch:12},{wch:16},{wch:12},{wch:8},{wch:8},{wch:8},{wch:10},{wch:30}];
+    ws['!cols'] = [{wch:16},{wch:18},{wch:16},{wch:12},{wch:16},{wch:14},{wch:8},{wch:14},{wch:10},{wch:8},{wch:8},{wch:30}];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '자재요청');
     const d = new Date();
@@ -838,7 +872,7 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, al
     generateDocPdf({
       title: '거래명세표', docNo: req.reqNo, dateStr: fmtDate(req.confirmedAt || req.createdAt),
       projectName: projectNameById[req.projectId], zoneStr: req.zoneName,
-      items: req.items, deliverLabel: '인도자 (자재팀)', deliverName: req.deliverName, deliverSignature: req.deliverSignature,
+      items: req.items, catalog, deliverLabel: '인도자 (자재팀)', deliverName: req.deliverName, deliverSignature: req.deliverSignature,
       receiveLabel: '인수자 (현장팀장)', receiveName: req.receiveName, receiveSignature: req.receiveSignature,
     });
   }
@@ -889,7 +923,12 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, al
                   <td>{r.requester}</td>
                   <td style={{ fontWeight: 600 }}>{r.name}</td><td style={{ color: 'var(--ink-soft)' }}>{r.spec || '-'}</td>
                   <td style={{ color: 'var(--ink-soft)' }}>{r.color || '-'}</td>
-                  <td className="mrs-mono">{r.qty} {r.unit}</td>
+                  <td>
+                    {(() => {
+                      const q = formatItemQty(catalog, r.name, r.spec, r.color, r.qty, r.unit);
+                      return <><div style={{ fontWeight: 600 }}>{q.big}</div>{q.conv && <div className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>{q.baseStr}</div>}</>;
+                    })()}
+                  </td>
                   <td>{role === 'material' ? <StatusBadge value={r.status} /> : <StatusSelect value={r.status} options={STATUS_FLOW} onChange={v => onUpdateStatus(r.reqId, r.itemId, v)} />}</td>
                   <td>
                     {allowPdf && r.status === '입고완료' && (
@@ -912,7 +951,7 @@ function RequestsTable({ requests, projects, onUpdateStatus, onDelete, scope, al
 }
 
 // ── 누계반출리스트 (관리자/자재팀 공용) ─────────────────────
-function ReturnsTable({ returns, projects }) {
+function ReturnsTable({ returns, projects, catalog = [] }) {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [statusFilter, setStatusFilter] = useState('전체');
@@ -941,10 +980,11 @@ function ReturnsTable({ returns, projects }) {
     const data = filtered.map(r => ({
       '프로젝트': r.projectName, '반출번호': r.reqNo, '반출일시': fmtDate(r.createdAt), '요청자': r.requester,
       '품목명': r.name, '규격': r.spec, '색상': r.color,
-      '수량': r.qty, '단위': r.unit, '상태': r.status, '사유': r.reason || '',
+      '수량(대단위)': formatStockByUnit(findCatalogItem(catalog, r.name, r.spec, r.color), r.qty),
+      '수량(낱개)': r.qty, '단위': r.unit, '상태': r.status, '사유': r.reason || '',
     }));
     const ws = XLSX.utils.json_to_sheet(data);
-    ws['!cols'] = [{wch:16},{wch:18},{wch:16},{wch:12},{wch:16},{wch:12},{wch:8},{wch:8},{wch:8},{wch:12},{wch:30}];
+    ws['!cols'] = [{wch:16},{wch:18},{wch:16},{wch:12},{wch:16},{wch:14},{wch:8},{wch:14},{wch:10},{wch:8},{wch:12},{wch:30}];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '물량반출');
     const d = new Date();
@@ -955,7 +995,7 @@ function ReturnsTable({ returns, projects }) {
     generateDocPdf({
       title: '반출확인서', docNo: r.reqNo, dateStr: fmtDate(r.confirmedAt || r.createdAt),
       projectName: projectNameById[r.projectId], zoneStr: r.zoneName,
-      items: r.items, deliverLabel: '인도자 (현장팀장)', deliverName: r.deliverName, deliverSignature: r.deliverSignature,
+      items: r.items, catalog, deliverLabel: '인도자 (현장팀장)', deliverName: r.deliverName, deliverSignature: r.deliverSignature,
       receiveLabel: '인수자 (자재팀)', receiveName: r.receiveName, receiveSignature: r.receiveSignature,
     });
   }
@@ -989,7 +1029,12 @@ function ReturnsTable({ returns, projects }) {
                   <td>{r.requester}</td>
                   <td style={{ fontWeight: 600 }}>{r.name}</td><td style={{ color: 'var(--ink-soft)' }}>{r.spec || '-'}</td>
                   <td style={{ color: 'var(--ink-soft)' }}>{r.color || '-'}</td>
-                  <td className="mrs-mono">{r.qty} {r.unit}</td>
+                  <td>
+                    {(() => {
+                      const q = formatItemQty(catalog, r.name, r.spec, r.color, r.qty, r.unit);
+                      return <><div style={{ fontWeight: 600 }}>{q.big}</div>{q.conv && <div className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>{q.baseStr}</div>}</>;
+                    })()}
+                  </td>
                   <td><StatusBadge value={r.status} /></td>
                   <td>
                     {r.status === '반출확인완료' && (
@@ -1642,10 +1687,10 @@ function AdminApp({ session, requests, returns, projects, users, zones, catalog,
         <button className={`mrs-tab ${tab === 'manage' ? 'active' : ''}`} onClick={() => setTab('manage')}><Users size={16} /> 관리 설정</button>
       </div>
 
-      {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} />}
-      {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" allowPdf />}
-      {tab === 'return' && <MaterialReturns returns={returns} projects={projects} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
-      {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} />}
+      {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} catalog={catalog} onUpdateStatus={onUpdateStatus} />}
+      {tab === 'all' && <RequestsTable requests={requests} projects={projects} catalog={catalog} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" allowPdf />}
+      {tab === 'return' && <MaterialReturns returns={returns} projects={projects} catalog={catalog} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
+      {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} catalog={catalog} />}
       {tab === 'stock' && <StockView stock={stock} requests={requests} projects={projects} catalog={catalog} />}
       {tab === 'manage' && (
         <div>
@@ -1662,7 +1707,7 @@ function AdminApp({ session, requests, returns, projects, users, zones, catalog,
 }
 
 // ── 자재팀: 발주확인 대기 ──────────────────────────────
-function MaterialOutbound({ requests, projects, onUpdateStatus }) {
+function MaterialOutbound({ requests, projects, catalog = [], onUpdateStatus }) {
   const projectNameById = {};
   projects.forEach(p => { projectNameById[p.id] = p.name; });
 
@@ -1692,11 +1737,15 @@ function MaterialOutbound({ requests, projects, onUpdateStatus }) {
           <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 10 }}>
             {projectNameById[r.projectId] || '-'} · {fmtDate(r.createdAt)}
           </div>
-          {r.items.map(it => (
-            <div key={it.id} style={{ fontSize: 13, padding: '5px 0', borderTop: '1px dashed var(--paper-line)' }}>
-              <b>{it.name}</b> {it.spec}{it.color && it.color !== 'N/A' ? ` ${it.color}` : ''} · {it.qty}{it.unit}
+          {r.items.map(it => {
+            const q = formatItemQty(catalog, it.name, it.spec, it.color, it.qty, it.unit);
+            return (
+            <div key={it.id} style={{ padding: '6px 0', borderTop: '1px dashed var(--paper-line)' }}>
+              <div style={{ fontSize: 13 }}><b>{it.name}</b> {it.spec}{it.color && it.color !== 'N/A' ? ` ${it.color}` : ''}</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--accent)' }}>{q.big}{q.conv && <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--ink-soft)' }}> ({q.baseStr})</span>}</div>
             </div>
-          ))}
+            );
+          })}
           <button className="mrs-btn mrs-btn-primary" style={{ width: '100%', marginTop: 12, justifyContent: 'center' }} onClick={() => confirmAll(r)}>
             <CheckCircle2 size={15} /> 발주확인 (전체 품목)
           </button>
@@ -1707,7 +1756,7 @@ function MaterialOutbound({ requests, projects, onUpdateStatus }) {
 }
 
 // ── 자재팀: 반출확인 대기 ──────────────────────────────
-function MaterialReturns({ returns, projects = [], onConfirmReturn, saving }) {
+function MaterialReturns({ returns, projects = [], catalog = [], onConfirmReturn, saving }) {
   const [confirmingId, setConfirmingId] = useState(null);
   const projectNameById = {};
   projects.forEach(p => { projectNameById[p.id] = p.name; });
@@ -1727,9 +1776,15 @@ function MaterialReturns({ returns, projects = [], onConfirmReturn, saving }) {
             <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{fmtDate(r.createdAt)}</span>
           </div>
           {(projectNameById[r.projectId] || r.reason) && <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>{projectNameById[r.projectId] || ''}{r.reason ? ` · ${r.reason}` : ''}</div>}
-          {r.items.map(it => (
-            <div key={it.id} style={{ fontSize: 13, padding: '3px 0' }}>{it.name} {it.spec} · {it.qty}{it.unit}</div>
-          ))}
+          {r.items.map(it => {
+            const q = formatItemQty(catalog, it.name, it.spec, it.color, it.qty, it.unit);
+            return (
+            <div key={it.id} style={{ padding: '4px 0' }}>
+              <span style={{ fontSize: 13 }}>{it.name} {it.spec}</span>
+              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent)', marginLeft: 6 }}>{q.big}{q.conv && <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--ink-soft)' }}> ({q.baseStr})</span>}</span>
+            </div>
+            );
+          })}
           {confirmingId !== r.id ? (
             <button className="mrs-btn mrs-btn-primary" style={{ marginTop: 10 }} onClick={() => setConfirmingId(r.id)}><PenLine size={15} /> 반출확인</button>
           ) : (
@@ -1758,10 +1813,10 @@ function MaterialApp({ requests, projects, returns, stock, catalog, onUpdateStat
         <button className={`mrs-tab ${tab === 'returns' ? 'active' : ''}`} onClick={() => setTab('returns')}><CalendarDays size={16} /> 누계 반출리스트</button>
         <button className={`mrs-tab ${tab === 'stock' ? 'active' : ''}`} onClick={() => setTab('stock')}><Package size={16} /> 재고 현황</button>
       </div>
-      {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} />}
-      {tab === 'all' && <RequestsTable requests={requests} projects={projects} onUpdateStatus={onUpdateStatus} scope="all" allowPdf role="material" />}
-      {tab === 'return' && <MaterialReturns returns={returns} projects={projects} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
-      {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} />}
+      {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} catalog={catalog} onUpdateStatus={onUpdateStatus} />}
+      {tab === 'all' && <RequestsTable requests={requests} projects={projects} catalog={catalog} onUpdateStatus={onUpdateStatus} scope="all" allowPdf role="material" />}
+      {tab === 'return' && <MaterialReturns returns={returns} projects={projects} catalog={catalog} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
+      {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} catalog={catalog} />}
       {tab === 'stock' && <StockView stock={stock} requests={requests} projects={projects} catalog={catalog} />}
     </div>
   );
