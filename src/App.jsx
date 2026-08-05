@@ -110,16 +110,16 @@ function formatStockByUnit(catItem, baseQty) {
   return `${q.toLocaleString()}${baseUnit}`;
 }
 
-// 특정 프로젝트+품목+규격+색상의 현재 재고(낱개) 계산: 보유물량 − 입고완료
-function computeStockRemain(stock, requests, projectId, name, spec, color) {
-  const stockItem = stock.find(s => s.projectId === projectId && s.itemName === name && s.itemSpec === spec && (s.itemColor || 'N/A') === (color || 'N/A'));
+// 특정 프로젝트+품목+규격의 현재 재고(낱개) 계산: 보유물량 − 입고완료
+function computeStockRemain(stock, requests, projectId, name, spec) {
+  const stockItem = stock.find(s => s.projectId === projectId && s.itemName === name && s.itemSpec === spec);
   if (!stockItem) return null; // 보유물량 미등록
   let delivered = 0;
   requests.forEach(r => {
     if (r.projectId !== projectId || !r.confirmedAt) return;
     r.items.forEach(it => {
       if (it.status !== '입고완료') return;
-      if (it.name === name && it.spec === spec && (it.color || 'N/A') === (color || 'N/A')) {
+      if (it.name === name && it.spec === spec) {
         delivered += Number(it.qty) || 0;
       }
     });
@@ -128,8 +128,8 @@ function computeStockRemain(stock, requests, projectId, name, spec, color) {
 }
 
 // 요청/반출 품목 1개를 대단위+낱개로 표시하는 문자열 (예: "5타 18본 (2,358 M)")
-function formatItemQty(catalog, name, spec, color, qty, unit) {
-  const cat = findCatalogItem(catalog, name, spec, color);
+function formatItemQty(catalog, name, spec, qty, unit) {
+  const cat = findCatalogItem(catalog, name, spec);
   const base = Number(qty) || 0;
   const conv = cat && ((cat.bigUnit && Number(cat.factor1) > 0) || (cat.midUnit && Number(cat.factor2) > 0));
   const big = formatStockByUnit(cat, base);
@@ -139,14 +139,11 @@ function formatItemQty(catalog, name, spec, color, qty, unit) {
 // ── 카탈로그 유틸 ─────────────────────────────────────────
 function catalogNames(catalog) { return [...new Set(catalog.map(c => c.name))]; }
 function catalogSpecs(catalog, name) { return [...new Set(catalog.filter(c => c.name === name).map(c => c.spec))]; }
-function catalogColors(catalog, name, spec) { return [...new Set(catalog.filter(c => c.name === name && c.spec === spec).map(c => c.color))]; }
-function findCatalogItem(catalog, name, spec, color) {
-  return catalog.find(c => c.name === name && c.spec === spec && c.color === color)
-    || catalog.find(c => c.name === name && c.spec === spec)
-    || null;
+function findCatalogItem(catalog, name, spec) {
+  return catalog.find(c => c.name === name && c.spec === spec) || null;
 }
-function catalogUnit(catalog, name, spec, color) {
-  const found = findCatalogItem(catalog, name, spec, color);
+function catalogUnit(catalog, name, spec) {
+  const found = findCatalogItem(catalog, name, spec);
   return found ? found.unit : 'EA';
 }
 
@@ -172,12 +169,11 @@ function convertToBase(catItem, big, mid, small) {
 }
 
 function newItemRow(catalog) {
-  if (catalog.length === 0) return { id: genId(), name: '', spec: '', color: 'N/A', big: '', mid: '', small: '', qty: 0, unit: 'EA' };
+  if (catalog.length === 0) return { id: genId(), name: '', spec: '', big: '', mid: '', small: '', qty: 0, unit: 'EA' };
   const name = catalogNames(catalog)[0];
   const spec = catalogSpecs(catalog, name)[0];
-  const color = catalogColors(catalog, name, spec)[0];
-  const cat = findCatalogItem(catalog, name, spec, color);
-  return { id: genId(), name, spec, color, big: '', mid: '', small: '', qty: 0, unit: cat ? cat.unit : 'EA' };
+  const cat = findCatalogItem(catalog, name, spec);
+  return { id: genId(), name, spec, big: '', mid: '', small: '', qty: 0, unit: cat ? cat.unit : 'EA' };
 }
 
 // ── 글로벌 CSS ──────────────────────────────────────────
@@ -377,17 +373,15 @@ function generateDocPdf({ title, docNo, dateStr, projectName, zoneStr, items, ca
   y += 6;
   doc.setFontSize(9);
   doc.text('품목', 14, y);
-  doc.text('규격', 55, y);
-  doc.text('색상', 85, y);
+  doc.text('규격', 60, y);
   doc.text('수량', pw - 14, y, { align: 'right' });
   y += 4;
   doc.line(14, y, pw - 14, y);
   y += 6;
   items.forEach(it => {
     doc.text(String(it.name || ''), 14, y);
-    doc.text(String(it.spec || '-'), 55, y);
-    doc.text(String(it.color || '-'), 85, y);
-    const cat = findCatalogItem(catalog, it.name, it.spec, it.color);
+    doc.text(String(it.spec || '-'), 60, y);
+    const cat = findCatalogItem(catalog, it.name, it.spec);
     const conv = cat && ((cat.bigUnit && Number(cat.factor1) > 0) || (cat.midUnit && Number(cat.factor2) > 0));
     if (conv) {
       const bigStr = formatStockByUnit(cat, it.qty);
@@ -427,8 +421,7 @@ function generateDocPdf({ title, docNo, dateStr, projectName, zoneStr, items, ca
 function ItemRowEditor({ item, catalog, onChange, onRemove, removable, stockRemain }) {
   const names = catalogNames(catalog);
   const specs = catalogSpecs(catalog, item.name);
-  const colors = catalogColors(catalog, item.name, item.spec);
-  const cat = findCatalogItem(catalog, item.name, item.spec, item.color);
+  const cat = findCatalogItem(catalog, item.name, item.spec);
 
   const hasMid = cat && cat.midUnit && (Number(cat.factor2) || 0) > 0;
   const hasBig = cat && cat.bigUnit && (Number(cat.factor1) || 0) > 0;
@@ -439,27 +432,23 @@ function ItemRowEditor({ item, catalog, onChange, onRemove, removable, stockRema
   const overStock = hasStock && reqQty > stockRemain;
 
   function recalc(next) {
-    const c = findCatalogItem(catalog, next.name, next.spec, next.color);
+    const c = findCatalogItem(catalog, next.name, next.spec);
     const total = convertToBase(c, next.big, next.mid, next.small);
     onChange({ ...next, qty: total, unit: c ? c.unit : (next.unit || 'EA') });
   }
   function handleNameChange(name) {
     const spec = catalogSpecs(catalog, name)[0] || '';
-    const color = catalogColors(catalog, name, spec)[0] || 'N/A';
-    recalc({ ...item, name, spec, color, big: '', mid: '', small: '' });
+    recalc({ ...item, name, spec, big: '', mid: '', small: '' });
   }
   function handleSpecChange(spec) {
-    const color = catalogColors(catalog, item.name, spec)[0] || 'N/A';
-    recalc({ ...item, spec, color, big: '', mid: '', small: '' });
+    recalc({ ...item, spec, big: '', mid: '', small: '' });
   }
-  function handleColorChange(color) { recalc({ ...item, color }); }
 
   return (
     <div className="mrs-card" style={{ padding: 12, marginBottom: 8, background: '#F7F5EF' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 0.9fr auto', gap: 6, marginBottom: 8, alignItems: 'end' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.4fr auto', gap: 6, marginBottom: 8, alignItems: 'end' }}>
         <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목</span><select className="mrs-select" value={item.name} onChange={e => handleNameChange(e.target.value)}>{names.length === 0 ? <option value="">품목 없음</option> : names.map(n => <option key={n} value={n}>{n}</option>)}</select></div>
         <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span><select className="mrs-select" value={item.spec} onChange={e => handleSpecChange(e.target.value)}>{specs.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
-        <div><span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span><select className="mrs-select" value={item.color} onChange={e => handleColorChange(e.target.value)} disabled={colors.length <= 1}>{colors.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
         <button className="mrs-btn mrs-btn-danger" onClick={onRemove} disabled={!removable} title="삭제" style={{ padding: 8 }}><Trash2 size={16} /></button>
       </div>
 
@@ -560,7 +549,7 @@ function RequestForm({ session, projectName, catalog, stock, requests, onSubmit,
     const payload = {
       id: genId(), reqNo: genReqNo(), requester: session.name, username: session.username,
       projectId: session.projectId, zoneName: '', process: '', note: note.trim(), createdAt: new Date().toISOString(),
-      items: valid.map(it => ({ id: genId(), name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit, status: '요청됨' })),
+      items: valid.map(it => ({ id: genId(), name: it.name, spec: it.spec, qty: it.qty, unit: it.unit, status: '요청됨' })),
     };
     await onSubmit(payload);
     setNote(''); setItems([newItemRow(catalog)]);
@@ -589,7 +578,7 @@ function RequestForm({ session, projectName, catalog, stock, requests, onSubmit,
         <>
           {items.map(it => (
             <ItemRowEditor key={it.id} item={it} catalog={catalog}
-              stockRemain={computeStockRemain(stock, requests, session.projectId, it.name, it.spec, it.color)}
+              stockRemain={computeStockRemain(stock, requests, session.projectId, it.name, it.spec)}
               onChange={u => updateItem(it.id, u)} onRemove={() => removeItem(it.id)} removable={items.length > 1} />
           ))}
           <button className="mrs-btn mrs-btn-ghost" style={{ marginTop: 10 }} onClick={addItem}><Plus size={15} /> 품목 추가</button>
@@ -653,11 +642,11 @@ function MyRequestList({ requests, session, projects, catalog = [], onConfirmRec
           </div>
           {r.note && <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 10 }}>{r.note}</div>}
           {r.items.map(it => {
-            const q = formatItemQty(catalog, it.name, it.spec, it.color, it.qty, it.unit);
+            const q = formatItemQty(catalog, it.name, it.spec, it.qty, it.unit);
             return (
             <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px dashed var(--paper-line)' }}>
               <span style={{ fontSize: 13 }}>
-                <b>{it.name}</b> {it.spec}{it.color && it.color !== 'N/A' ? ` ${it.color}` : ''}
+                <b>{it.name}</b> {it.spec}
                 <span style={{ fontWeight: 700, color: 'var(--accent)', marginLeft: 6 }}>{q.big}</span>
                 {q.conv && <span style={{ fontSize: 11, color: 'var(--ink-soft)' }}> ({q.baseStr})</span>}
               </span>
@@ -713,7 +702,7 @@ function ReturnPanel({ session, projectName, catalog, returns, onSubmit, saving 
     const payload = {
       id: genId(), reqNo: genReqNo(), requester: session.name, username: session.username,
       projectId: session.projectId, zoneName: '', reason: reason.trim(), createdAt: new Date().toISOString(),
-      items: valid.map(it => ({ id: genId(), name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit })),
+      items: valid.map(it => ({ id: genId(), name: it.name, spec: it.spec, qty: it.qty, unit: it.unit })),
     };
     await onSubmit(payload);
     setReason(''); setItems([newItemRow(catalog)]);
@@ -783,7 +772,7 @@ function ReturnPanel({ session, projectName, catalog, returns, onSubmit, saving 
           </div>
           {r.reason && <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>{r.reason}</div>}
           {r.items.map(it => {
-            const q = formatItemQty(catalog, it.name, it.spec, it.color, it.qty, it.unit);
+            const q = formatItemQty(catalog, it.name, it.spec, it.qty, it.unit);
             return (
             <div key={it.id} style={{ fontSize: 13, padding: '3px 0' }}>{it.name} {it.spec} <span style={{ fontWeight: 700, color: 'var(--accent)' }}>{q.big}</span>{q.conv && <span style={{ fontSize: 11, color: 'var(--ink-soft)' }}> ({q.baseStr})</span>}</div>
             );
@@ -835,7 +824,7 @@ function RequestsTable({ requests, projects, catalog = [], onUpdateStatus, onDel
       rows.push({
         req: r, reqId: r.id, itemId: it.id, reqNo: r.reqNo, requester: r.requester,
         projectId: r.projectId, projectName: projectNameById[r.projectId] || '(삭제된 프로젝트)',
-        name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit,
+        name: it.name, spec: it.spec, qty: it.qty, unit: it.unit,
         status: it.status, note: r.note, createdAt: r.createdAt,
       });
     });
@@ -855,8 +844,8 @@ function RequestsTable({ requests, projects, catalog = [], onUpdateStatus, onDel
   function exportExcel() {
     const data = filtered.map(r => ({
       '프로젝트': r.projectName, '요청번호': r.reqNo, '요청일시': fmtDate(r.createdAt), '요청자': r.requester,
-      '품목명': r.name, '규격': r.spec, '색상': r.color,
-      '수량(대단위)': formatStockByUnit(findCatalogItem(catalog, r.name, r.spec, r.color), r.qty),
+      '품목명': r.name, '규격': r.spec,
+      '수량(대단위)': formatStockByUnit(findCatalogItem(catalog, r.name, r.spec), r.qty),
       '수량(낱개)': r.qty, '단위': r.unit, '상태': r.status, '특이사항': r.note || '',
     }));
     const ws = XLSX.utils.json_to_sheet(data);
@@ -913,7 +902,7 @@ function RequestsTable({ requests, projects, catalog = [], onUpdateStatus, onDel
       ) : (
         <div className="mrs-table-wrap">
           <table className="mrs-table">
-            <thead><tr><th>프로젝트</th><th>요청번호</th><th>요청일시</th><th>요청자</th><th>품목명</th><th>규격</th><th>색상</th><th>수량</th><th>상태</th><th></th><th></th></tr></thead>
+            <thead><tr><th>프로젝트</th><th>요청번호</th><th>요청일시</th><th>요청자</th><th>품목명</th><th>규격</th><th>수량</th><th>상태</th><th></th><th></th></tr></thead>
             <tbody>
               {filtered.map(r => (
                 <tr key={r.itemId}>
@@ -922,10 +911,9 @@ function RequestsTable({ requests, projects, catalog = [], onUpdateStatus, onDel
                   <td className="mrs-mono" style={{ fontSize: 12 }}>{fmtDate(r.createdAt)}</td>
                   <td>{r.requester}</td>
                   <td style={{ fontWeight: 600 }}>{r.name}</td><td style={{ color: 'var(--ink-soft)' }}>{r.spec || '-'}</td>
-                  <td style={{ color: 'var(--ink-soft)' }}>{r.color || '-'}</td>
                   <td>
                     {(() => {
-                      const q = formatItemQty(catalog, r.name, r.spec, r.color, r.qty, r.unit);
+                      const q = formatItemQty(catalog, r.name, r.spec, r.qty, r.unit);
                       return <><div style={{ fontWeight: 600 }}>{q.big}</div>{q.conv && <div className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>{q.baseStr}</div>}</>;
                     })()}
                   </td>
@@ -964,7 +952,7 @@ function ReturnsTable({ returns, projects, catalog = [] }) {
       rows.push({
         ret: r, reqId: r.id, reqNo: r.reqNo, requester: r.requester,
         projectName: projectNameById[r.projectId] || '-',
-        zoneName: r.zoneName || '', name: it.name, spec: it.spec, color: it.color, qty: it.qty, unit: it.unit,
+        zoneName: r.zoneName || '', name: it.name, spec: it.spec, qty: it.qty, unit: it.unit,
         status: r.status, reason: r.reason, createdAt: r.createdAt,
       });
     });
@@ -979,8 +967,8 @@ function ReturnsTable({ returns, projects, catalog = [] }) {
   function exportExcel() {
     const data = filtered.map(r => ({
       '프로젝트': r.projectName, '반출번호': r.reqNo, '반출일시': fmtDate(r.createdAt), '요청자': r.requester,
-      '품목명': r.name, '규격': r.spec, '색상': r.color,
-      '수량(대단위)': formatStockByUnit(findCatalogItem(catalog, r.name, r.spec, r.color), r.qty),
+      '품목명': r.name, '규격': r.spec,
+      '수량(대단위)': formatStockByUnit(findCatalogItem(catalog, r.name, r.spec), r.qty),
       '수량(낱개)': r.qty, '단위': r.unit, '상태': r.status, '사유': r.reason || '',
     }));
     const ws = XLSX.utils.json_to_sheet(data);
@@ -1019,7 +1007,7 @@ function ReturnsTable({ returns, projects, catalog = [] }) {
       ) : (
         <div className="mrs-table-wrap">
           <table className="mrs-table">
-            <thead><tr><th>프로젝트</th><th>반출번호</th><th>반출일시</th><th>요청자</th><th>품목명</th><th>규격</th><th>색상</th><th>수량</th><th>상태</th><th></th></tr></thead>
+            <thead><tr><th>프로젝트</th><th>반출번호</th><th>반출일시</th><th>요청자</th><th>품목명</th><th>규격</th><th>수량</th><th>상태</th><th></th></tr></thead>
             <tbody>
               {filtered.map((r, i) => (
                 <tr key={i}>
@@ -1028,10 +1016,9 @@ function ReturnsTable({ returns, projects, catalog = [] }) {
                   <td className="mrs-mono" style={{ fontSize: 12 }}>{fmtDate(r.createdAt)}</td>
                   <td>{r.requester}</td>
                   <td style={{ fontWeight: 600 }}>{r.name}</td><td style={{ color: 'var(--ink-soft)' }}>{r.spec || '-'}</td>
-                  <td style={{ color: 'var(--ink-soft)' }}>{r.color || '-'}</td>
                   <td>
                     {(() => {
-                      const q = formatItemQty(catalog, r.name, r.spec, r.color, r.qty, r.unit);
+                      const q = formatItemQty(catalog, r.name, r.spec, r.qty, r.unit);
                       return <><div style={{ fontWeight: 600 }}>{q.big}</div>{q.conv && <div className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>{q.baseStr}</div>}</>;
                     })()}
                   </td>
@@ -1171,19 +1158,19 @@ function CatalogManager({ catalog, onSave, saving }) {
   const fileRef = useRef(null);
   useEffect(() => setDraft(catalog), [catalog]);
 
-  function addRow() { setDraft([...draft, { id: genId('cat'), name: '', spec: '', color: 'N/A', unit: 'EA', bigUnit: '', midUnit: '', factor1: 0, factor2: 0 }]); }
+  function addRow() { setDraft([...draft, { id: genId('cat'), name: '', spec: '', unit: 'EA', bigUnit: '', midUnit: '', factor1: 0, factor2: 0 }]); }
   function remove(idx) { setDraft(draft.filter((_, i) => i !== idx)); }
   function update(idx, field, val) { const next = [...draft]; next[idx] = { ...next[idx], [field]: val }; setDraft(next); }
 
   function downloadTemplate() {
     const rows = [
-      { '품목명': '무나사전선관', '규격': 'E19', '색상': 'N/A', '낱개단위': 'M', '대단위': '타', '중단위': '본', '1대=중': 127, '1중=낱개': 3.6 },
-      { '품목명': '커플링', '규격': 'E19', '색상': 'N/A', '낱개단위': 'EA', '대단위': 'BOX', '중단위': '', '1대=중': 120, '1중=낱개': '' },
-      { '품목명': '통신케이블', '규격': '14AWGx1P,TP(적)', '색상': '적', '낱개단위': 'M', '대단위': '롤', '중단위': '', '1대=중': 300, '1중=낱개': '' },
-      { '품목명': '내화케이블', '규격': '4mm2,03C', '색상': 'N/A', '낱개단위': 'M', '대단위': '', '중단위': '', '1대=중': '', '1중=낱개': '' },
+      { '품목명': '무나사전선관', '규격': 'E19', '낱개단위': 'M', '대단위': '타', '중단위': '본', '1대=중': 127, '1중=낱개': 3.6 },
+      { '품목명': '커플링', '규격': 'E19', '낱개단위': 'EA', '대단위': 'BOX', '중단위': '', '1대=중': 120, '1중=낱개': '' },
+      { '품목명': '통신케이블', '규격': '14AWGx1P,TP(적)', '낱개단위': 'M', '대단위': '롤', '중단위': '', '1대=중': 300, '1중=낱개': '' },
+      { '품목명': '내화케이블', '규격': '0.6/1kV,TFR-8,4mm2,03C', '낱개단위': 'M', '대단위': '', '중단위': '', '1대=중': '', '1중=낱개': '' },
     ];
     const ws = XLSX.utils.json_to_sheet(rows);
-    ws['!cols'] = [{ wch: 16 }, { wch: 20 }, { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 10 }];
+    ws['!cols'] = [{ wch: 16 }, { wch: 24 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '품목');
     XLSX.writeFile(wb, '품목_업로드_양식.xlsx');
@@ -1202,7 +1189,6 @@ function CatalogManager({ catalog, onSave, saving }) {
           id: genId('cat'),
           name: String(row['품목명'] || row['품목'] || '').trim(),
           spec: String(row['규격'] || '').trim(),
-          color: String(row['색상'] || 'N/A').trim() || 'N/A',
           unit: String(row['낱개단위'] || row['단위'] || 'EA').trim() || 'EA',
           bigUnit: String(row['대단위'] || '').trim(),
           midUnit: String(row['중단위'] || '').trim(),
@@ -1219,12 +1205,12 @@ function CatalogManager({ catalog, onSave, saving }) {
     e.target.value = '';
   }
 
-  const GRID = '1.4fr 1.2fr 0.7fr 0.7fr 0.6fr 0.6fr 0.7fr 0.7fr auto';
+  const GRID = '1.4fr 1.3fr 0.8fr 0.7fr 0.7fr 0.8fr 0.8fr auto';
 
   return (
     <div className="mrs-card" style={{ padding: 18, marginBottom: 20 }}>
       <h3 className="mrs-display" style={{ fontSize: 15, margin: '0 0 12px', fontWeight: 600 }}><Package size={15} style={{ verticalAlign: -2 }} /> 품목 관리</h3>
-      <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 6 }}>색상 없으면 N/A. 단위 환산: 낱개단위(M/EA)가 기준, 대단위(타/BOX/롤)·중단위(본)와 계수 입력.</div>
+      <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 6 }}>단위 환산: 낱개단위(M/EA)가 기준, 대단위(타/BOX/롤)·중단위(본)와 계수 입력.</div>
       <div style={{ fontSize: 11, color: 'var(--ink-soft)', marginBottom: 10, lineHeight: 1.5 }}>
         · 무나사전선관: 대=타, 중=본, 1대=중 127, 1중=낱개 3.6<br />
         · 커플링/박스커넥터: 대=BOX, 1대=중(=낱개) 120 등, 중단위 비움<br />
@@ -1242,12 +1228,11 @@ function CatalogManager({ catalog, onSave, saving }) {
         <div style={{ fontSize: 13, color: 'var(--ink-soft)', padding: '10px 0' }}>등록된 품목이 없습니다.</div>
       ) : (
         <div style={{ overflowX: 'auto' }}>
-          <div style={{ minWidth: 720 }}>
+          <div style={{ minWidth: 680 }}>
             <div style={{ display: 'grid', gridTemplateColumns: GRID, gap: 5, marginBottom: 4 }}>
               <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>품목명</span>
               <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>규격</span>
               <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>낱개</span>
-              <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>색상</span>
               <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>대단위</span>
               <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>중단위</span>
               <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>1대=중</span>
@@ -1261,7 +1246,6 @@ function CatalogManager({ catalog, onSave, saving }) {
                 <select className="mrs-select" value={it.unit} onChange={e => update(idx, 'unit', e.target.value)}>
                   {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
                 </select>
-                <input className="mrs-input" value={it.color} onChange={e => update(idx, 'color', e.target.value)} placeholder="N/A" />
                 <input className="mrs-input" value={it.bigUnit || ''} onChange={e => update(idx, 'bigUnit', e.target.value)} placeholder="타" />
                 <input className="mrs-input" value={it.midUnit || ''} onChange={e => update(idx, 'midUnit', e.target.value)} placeholder="본" />
                 <input className="mrs-input" type="number" min="0" value={it.factor1 || ''} onChange={e => update(idx, 'factor1', e.target.value)} placeholder="127" />
@@ -1305,7 +1289,7 @@ function StockManager({ stock, catalog, projects, onSave, saving }) {
   // 기존 stock(낱개 qty)을 big/mid/small로 분해해서 편집 상태 구성
   function seed(list) {
     return list.map(s => {
-      const cat = findCatalogItem(catalog, s.itemName, s.itemSpec, s.itemColor);
+      const cat = findCatalogItem(catalog, s.itemName, s.itemSpec);
       const d = decomposeToUnits(cat, s.qty);
       return { ...s, big: d.big, mid: d.mid, small: d.small };
     });
@@ -1319,16 +1303,15 @@ function StockManager({ stock, catalog, projects, onSave, saving }) {
   function addRow() {
     const name = names[0] || '';
     const spec = catalogSpecs(catalog, name)[0] || '';
-    const color = catalogColors(catalog, name, spec)[0] || 'N/A';
-    const cat = findCatalogItem(catalog, name, spec, color);
-    setDraft([...draft, { id: genId('stock'), projectId: projects[0]?.id || '', itemName: name, itemSpec: spec, itemColor: color, unit: cat ? cat.unit : 'EA', big: '', mid: '', small: '', qty: 0 }]);
+    const cat = findCatalogItem(catalog, name, spec);
+    setDraft([...draft, { id: genId('stock'), projectId: projects[0]?.id || '', itemName: name, itemSpec: spec, unit: cat ? cat.unit : 'EA', big: '', mid: '', small: '', qty: 0 }]);
   }
   function remove(idx) { setDraft(draft.filter((_, i) => i !== idx)); }
 
   function recalc(idx, patch) {
     const next = [...draft];
     const row = { ...next[idx], ...patch };
-    const cat = findCatalogItem(catalog, row.itemName, row.itemSpec, row.itemColor);
+    const cat = findCatalogItem(catalog, row.itemName, row.itemSpec);
     row.qty = convertToBase(cat, row.big, row.mid, row.small);
     row.unit = cat ? cat.unit : (row.unit || 'EA');
     next[idx] = row;
@@ -1336,23 +1319,20 @@ function StockManager({ stock, catalog, projects, onSave, saving }) {
   }
   function changeName(idx, name) {
     const spec = catalogSpecs(catalog, name)[0] || '';
-    const color = catalogColors(catalog, name, spec)[0] || 'N/A';
-    recalc(idx, { itemName: name, itemSpec: spec, itemColor: color, big: '', mid: '', small: '' });
+    recalc(idx, { itemName: name, itemSpec: spec, big: '', mid: '', small: '' });
   }
   function changeSpec(idx, spec) {
-    const name = draft[idx].itemName;
-    const color = catalogColors(catalog, name, spec)[0] || 'N/A';
-    recalc(idx, { itemSpec: spec, itemColor: color, big: '', mid: '', small: '' });
+    recalc(idx, { itemSpec: spec, big: '', mid: '', small: '' });
   }
 
   function downloadTemplate() {
     const rows = [
-      { '프로젝트명': projects[0]?.name || 'P5 Ph1 (삼성물산)', '품목명': '무나사전선관', '규격': 'E19', '색상': 'N/A', '대단위수량': 10, '중단위수량': 35, '낱개수량': 0 },
-      { '프로젝트명': projects[0]?.name || 'P5 Ph1 (삼성물산)', '품목명': '커플링', '규격': 'E19', '색상': 'N/A', '대단위수량': 10, '중단위수량': 0, '낱개수량': 2 },
-      { '프로젝트명': projects[0]?.name || 'P5 Ph1 (삼성물산)', '품목명': '내화케이블', '규격': '0.6/1kV,TFR-8,4mm2,03C', '색상': 'N/A', '대단위수량': 0, '중단위수량': 0, '낱개수량': 141 },
+      { '프로젝트명': projects[0]?.name || 'P5 Ph1 (삼성물산)', '품목명': '무나사전선관', '규격': 'E19', '대단위수량': 10, '중단위수량': 35, '낱개수량': 0 },
+      { '프로젝트명': projects[0]?.name || 'P5 Ph1 (삼성물산)', '품목명': '커플링', '규격': 'E19', '대단위수량': 10, '중단위수량': 0, '낱개수량': 2 },
+      { '프로젝트명': projects[0]?.name || 'P5 Ph1 (삼성물산)', '품목명': '내화케이블', '규격': '0.6/1kV,TFR-8,4mm2,03C', '대단위수량': 0, '중단위수량': 0, '낱개수량': 141 },
     ];
     const ws = XLSX.utils.json_to_sheet(rows);
-    ws['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 22 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 10 }];
+    ws['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '보유물량');
     XLSX.writeFile(wb, '보유물량_업로드_양식.xlsx');
@@ -1372,8 +1352,7 @@ function StockManager({ stock, catalog, projects, onSave, saving }) {
         const parsed = rows.map(row => {
           const itemName = String(row['품목명'] || row['품목'] || '').trim();
           const itemSpec = String(row['규격'] || '').trim();
-          const itemColor = String(row['색상'] || 'N/A').trim() || 'N/A';
-          const cat = findCatalogItem(catalog, itemName, itemSpec, itemColor);
+          const cat = findCatalogItem(catalog, itemName, itemSpec);
           let qty, big = '', mid = '', small = '';
           if (row['대단위수량'] !== undefined || row['중단위수량'] !== undefined || row['낱개수량'] !== undefined) {
             big = row['대단위수량'] != null ? String(row['대단위수량']) : '';
@@ -1387,7 +1366,7 @@ function StockManager({ stock, catalog, projects, onSave, saving }) {
           return {
             id: genId('stock'),
             projectId: projectByName[String(row['프로젝트명'] || row['프로젝트'] || '').trim()] || projects[0]?.id || '',
-            itemName, itemSpec, itemColor, unit: cat ? cat.unit : 'EA', big, mid, small, qty,
+            itemName, itemSpec, unit: cat ? cat.unit : 'EA', big, mid, small, qty,
           };
         }).filter(it => it.itemName && it.itemSpec);
         if (parsed.length === 0) { alert('업로드할 데이터가 없습니다.'); return; }
@@ -1438,7 +1417,7 @@ function StockManager({ stock, catalog, projects, onSave, saving }) {
               <span></span>
             </div>
             {draft.map((it, idx) => {
-              const cat = findCatalogItem(catalog, it.itemName, it.itemSpec, it.itemColor);
+              const cat = findCatalogItem(catalog, it.itemName, it.itemSpec);
               const hasMid = cat && cat.midUnit && Number(cat.factor2) > 0;
               const hasBig = cat && cat.bigUnit && Number(cat.factor1) > 0;
               const baseUnit = cat ? cat.unit : (it.unit || 'EA');
@@ -1486,19 +1465,19 @@ function StockView({ stock, requests, projects, catalog = [] }) {
     if (!r.confirmedAt) return;
     r.items.forEach(it => {
       if (it.status !== '입고완료') return;
-      const key = `${r.projectId}|${it.name}|${it.spec}|${it.color || 'N/A'}`;
+      const key = `${r.projectId}|${it.name}|${it.spec}`;
       deliveredMap[key] = (deliveredMap[key] || 0) + (Number(it.qty) || 0);
     });
   });
 
   const rows = stock.map(s => {
-    const key = `${s.projectId}|${s.itemName}|${s.itemSpec}|${s.itemColor || 'N/A'}`;
+    const key = `${s.projectId}|${s.itemName}|${s.itemSpec}`;
     const delivered = deliveredMap[key] || 0;
     const remain = (Number(s.qty) || 0) - delivered;
-    const cat = findCatalogItem(catalog, s.itemName, s.itemSpec, s.itemColor);
+    const cat = findCatalogItem(catalog, s.itemName, s.itemSpec);
     return {
       id: s.id, projectId: s.projectId, projectName: projectNameById[s.projectId] || '-',
-      itemName: s.itemName, itemSpec: s.itemSpec, itemColor: s.itemColor, unit: s.unit,
+      itemName: s.itemName, itemSpec: s.itemSpec, unit: s.unit,
       stockQty: Number(s.qty) || 0, deliveredQty: delivered, remain, cat,
     };
   });
@@ -1508,13 +1487,13 @@ function StockView({ stock, requests, projects, catalog = [] }) {
 
   function exportExcel() {
     const data = filtered.map(r => ({
-      '프로젝트': r.projectName, '품목명': r.itemName, '규격': r.itemSpec, '색상': r.itemColor,
+      '프로젝트': r.projectName, '품목명': r.itemName, '규격': r.itemSpec,
       '보유물량': formatStockByUnit(r.cat, r.stockQty), '입고완료': formatStockByUnit(r.cat, r.deliveredQty),
       '재고물량': formatStockByUnit(r.cat, r.remain),
       '보유(낱개)': r.stockQty, '입고(낱개)': r.deliveredQty, '재고(낱개)': r.remain, '단위': r.unit,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
-    ws['!cols'] = [{wch:20},{wch:16},{wch:18},{wch:8},{wch:14},{wch:14},{wch:14},{wch:10},{wch:10},{wch:10},{wch:8}];
+    ws['!cols'] = [{wch:20},{wch:16},{wch:22},{wch:14},{wch:14},{wch:14},{wch:10},{wch:10},{wch:10},{wch:8}];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '재고현황');
     const d = new Date();
@@ -1537,7 +1516,7 @@ function StockView({ stock, requests, projects, catalog = [] }) {
       ) : (
         <div className="mrs-table-wrap">
           <table className="mrs-table">
-            <thead><tr><th>프로젝트</th><th>품목</th><th>규격</th><th>색상</th><th>보유물량</th><th>입고완료</th><th>재고물량</th></tr></thead>
+            <thead><tr><th>프로젝트</th><th>품목</th><th>규격</th><th>보유물량</th><th>입고완료</th><th>재고물량</th></tr></thead>
             <tbody>
               {filtered.map(r => {
                 const conv = r.cat && ((r.cat.bigUnit && Number(r.cat.factor1) > 0) || (r.cat.midUnit && Number(r.cat.factor2) > 0));
@@ -1546,7 +1525,6 @@ function StockView({ stock, requests, projects, catalog = [] }) {
                   <td style={{ fontWeight: 600 }}>{r.projectName}</td>
                   <td style={{ fontWeight: 600 }}>{r.itemName}</td>
                   <td style={{ color: 'var(--ink-soft)' }}>{r.itemSpec}</td>
-                  <td style={{ color: 'var(--ink-soft)' }}>{r.itemColor}</td>
                   <td>
                     <div style={{ fontWeight: 600 }}>{formatStockByUnit(r.cat, r.stockQty)}</div>
                     {conv && <div className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>{r.stockQty.toLocaleString()} {r.unit}</div>}
@@ -1738,10 +1716,10 @@ function MaterialOutbound({ requests, projects, catalog = [], onUpdateStatus }) 
             {projectNameById[r.projectId] || '-'} · {fmtDate(r.createdAt)}
           </div>
           {r.items.map(it => {
-            const q = formatItemQty(catalog, it.name, it.spec, it.color, it.qty, it.unit);
+            const q = formatItemQty(catalog, it.name, it.spec, it.qty, it.unit);
             return (
             <div key={it.id} style={{ padding: '6px 0', borderTop: '1px dashed var(--paper-line)' }}>
-              <div style={{ fontSize: 13 }}><b>{it.name}</b> {it.spec}{it.color && it.color !== 'N/A' ? ` ${it.color}` : ''}</div>
+              <div style={{ fontSize: 13 }}><b>{it.name}</b> {it.spec}</div>
               <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--accent)' }}>{q.big}{q.conv && <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--ink-soft)' }}> ({q.baseStr})</span>}</div>
             </div>
             );
@@ -1777,7 +1755,7 @@ function MaterialReturns({ returns, projects = [], catalog = [], onConfirmReturn
           </div>
           {(projectNameById[r.projectId] || r.reason) && <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>{projectNameById[r.projectId] || ''}{r.reason ? ` · ${r.reason}` : ''}</div>}
           {r.items.map(it => {
-            const q = formatItemQty(catalog, it.name, it.spec, it.color, it.qty, it.unit);
+            const q = formatItemQty(catalog, it.name, it.spec, it.qty, it.unit);
             return (
             <div key={it.id} style={{ padding: '4px 0' }}>
               <span style={{ fontSize: 13 }}>{it.name} {it.spec}</span>
@@ -2062,3 +2040,4 @@ export default function App() {
     </div>
   );
 }
+
