@@ -110,21 +110,31 @@ function formatStockByUnit(catItem, baseQty) {
   return `${q.toLocaleString()}${baseUnit}`;
 }
 
-// 특정 프로젝트+품목+규격의 현재 재고(낱개) 계산: 보유물량 − 입고완료
-function computeStockRemain(stock, requests, projectId, name, spec) {
+// 특정 프로젝트+품목+규격의 재고 계산
+// 실재고 = 보유물량 − 입고완료
+// 진행중 = 요청됨 + 확인됨 (입고 전, 아직 빠져나갈 예정)
+// 가용재고 = 보유물량 − 진행중 − 입고완료
+function computeStockInfo(stock, requests, projectId, name, spec) {
   const stockItem = stock.find(s => s.projectId === projectId && s.itemName === name && s.itemSpec === spec);
   if (!stockItem) return null; // 보유물량 미등록
-  let delivered = 0;
+  let delivered = 0, inProgress = 0;
   requests.forEach(r => {
-    if (r.projectId !== projectId || !r.confirmedAt) return;
+    if (r.projectId !== projectId) return;
     r.items.forEach(it => {
-      if (it.status !== '입고완료') return;
-      if (it.name === name && it.spec === spec) {
-        delivered += Number(it.qty) || 0;
-      }
+      if (it.name !== name || it.spec !== spec) return;
+      const q = Number(it.qty) || 0;
+      if (it.status === '입고완료') { if (r.confirmedAt) delivered += q; }
+      else if (it.status === '요청됨' || it.status === '확인됨') { inProgress += q; }
     });
   });
-  return (Number(stockItem.qty) || 0) - delivered;
+  const base = Number(stockItem.qty) || 0;
+  return { base, delivered, inProgress, real: base - delivered, available: base - delivered - inProgress };
+}
+
+// 하위호환: 가용재고 반환 (기존 호출부용)
+function computeStockRemain(stock, requests, projectId, name, spec) {
+  const info = computeStockInfo(stock, requests, projectId, name, spec);
+  return info ? info.available : null;
 }
 
 // 요청/반출 품목 1개를 대단위+낱개로 표시하는 문자열 (예: "5타 18본 (2,358 M)")
@@ -418,7 +428,7 @@ function generateDocPdf({ title, docNo, dateStr, projectName, zoneStr, items, ca
 }
 
 // ── 품목 행 편집기 (카탈로그 기반) ────────────────────────
-function ItemRowEditor({ item, catalog, onChange, onRemove, removable, stockRemain }) {
+function ItemRowEditor({ item, catalog, onChange, onRemove, removable, stockInfo }) {
   const names = catalogNames(catalog);
   const specs = catalogSpecs(catalog, item.name);
   const cat = findCatalogItem(catalog, item.name, item.spec);
@@ -426,10 +436,13 @@ function ItemRowEditor({ item, catalog, onChange, onRemove, removable, stockRema
   const hasMid = cat && cat.midUnit && (Number(cat.factor2) || 0) > 0;
   const hasBig = cat && cat.bigUnit && (Number(cat.factor1) || 0) > 0;
   const baseUnit = cat ? cat.unit : (item.unit || 'EA');
+  const conv = hasBig || hasMid;
 
   const reqQty = Number(item.qty) || 0;
-  const hasStock = stockRemain !== null && stockRemain !== undefined;
-  const overStock = hasStock && reqQty > stockRemain;
+  const hasStock = stockInfo !== null && stockInfo !== undefined;
+  const available = hasStock ? stockInfo.available : 0;
+  const real = hasStock ? stockInfo.real : 0;
+  const overStock = hasStock && reqQty > available;
 
   function recalc(next) {
     const c = findCatalogItem(catalog, next.name, next.spec);
@@ -453,11 +466,19 @@ function ItemRowEditor({ item, catalog, onChange, onRemove, removable, stockRema
       </div>
 
       {hasStock && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-          <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 8, textAlign: 'right', lineHeight: 1.4,
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 5, marginBottom: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11, padding: '3px 9px', borderRadius: 8, textAlign: 'center', lineHeight: 1.3,
+            border: `1.5px solid ${overStock ? '#D9601B' : '#2E6B47'}`,
             background: overStock ? '#FBE7DA' : '#E1EBE3', color: overStock ? '#B84B10' : '#2E6B47' }}>
-            재고 {formatStockByUnit(cat, stockRemain)}
-            {(hasBig || hasMid) && <span style={{ fontSize: 10, opacity: 0.75 }}> ({stockRemain.toLocaleString()} {baseUnit})</span>}
+            <span style={{ fontSize: 8, display: 'block', opacity: 0.8, fontWeight: 600 }}>가용</span>
+            {formatStockByUnit(cat, available)}
+            {conv && <span style={{ fontSize: 9, opacity: 0.7 }}> ({available.toLocaleString()})</span>}
+          </span>
+          <span style={{ fontSize: 11, padding: '3px 9px', borderRadius: 8, textAlign: 'center', lineHeight: 1.3,
+            border: '1.5px solid #B0A99A', background: '#FAF8F2', color: 'var(--ink-soft)' }}>
+            <span style={{ fontSize: 8, display: 'block', opacity: 0.8, fontWeight: 600 }}>실재고</span>
+            {formatStockByUnit(cat, real)}
+            {conv && <span style={{ fontSize: 9, opacity: 0.7 }}> ({real.toLocaleString()})</span>}
           </span>
         </div>
       )}
@@ -486,7 +507,7 @@ function ItemRowEditor({ item, catalog, onChange, onRemove, removable, stockRema
       </div>
       {overStock && (
         <div style={{ fontSize: 11, color: '#B84B10', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
-          <AlertCircle size={13} /> 요청량({reqQty.toLocaleString()})이 재고({stockRemain.toLocaleString()})를 초과합니다
+          <AlertCircle size={13} /> 요청량({reqQty.toLocaleString()})이 가용재고({available.toLocaleString()})를 초과합니다
         </div>
       )}
       {(hasBig || hasMid) && (
@@ -578,7 +599,7 @@ function RequestForm({ session, projectName, catalog, stock, requests, onSubmit,
         <>
           {items.map(it => (
             <ItemRowEditor key={it.id} item={it} catalog={catalog}
-              stockRemain={computeStockRemain(stock, requests, session.projectId, it.name, it.spec)}
+              stockInfo={computeStockInfo(stock, requests, session.projectId, it.name, it.spec)}
               onChange={u => updateItem(it.id, u)} onRemove={() => removeItem(it.id)} removable={items.length > 1} />
           ))}
           <button className="mrs-btn mrs-btn-ghost" style={{ marginTop: 10 }} onClick={addItem}><Plus size={15} /> 품목 추가</button>
@@ -1459,26 +1480,30 @@ function StockView({ stock, requests, projects, catalog = [] }) {
   const projectNameById = {};
   projects.forEach(p => { projectNameById[p.id] = p.name; });
 
-  // 팀장이 입고확인(서명)한 = '입고완료' + confirmedAt이 있는 요청의 품목만 합산
+  // 입고완료(실재고 차감) + 진행중(가용재고 추가 차감) 집계
   const deliveredMap = {};
+  const inProgressMap = {};
   requests.forEach(r => {
-    if (!r.confirmedAt) return;
     r.items.forEach(it => {
-      if (it.status !== '입고완료') return;
       const key = `${r.projectId}|${it.name}|${it.spec}`;
-      deliveredMap[key] = (deliveredMap[key] || 0) + (Number(it.qty) || 0);
+      const q = Number(it.qty) || 0;
+      if (it.status === '입고완료') { if (r.confirmedAt) deliveredMap[key] = (deliveredMap[key] || 0) + q; }
+      else if (it.status === '요청됨' || it.status === '확인됨') { inProgressMap[key] = (inProgressMap[key] || 0) + q; }
     });
   });
 
   const rows = stock.map(s => {
     const key = `${s.projectId}|${s.itemName}|${s.itemSpec}`;
     const delivered = deliveredMap[key] || 0;
-    const remain = (Number(s.qty) || 0) - delivered;
+    const inProgress = inProgressMap[key] || 0;
+    const base = Number(s.qty) || 0;
+    const real = base - delivered;
+    const available = base - delivered - inProgress;
     const cat = findCatalogItem(catalog, s.itemName, s.itemSpec);
     return {
       id: s.id, projectId: s.projectId, projectName: projectNameById[s.projectId] || '-',
       itemName: s.itemName, itemSpec: s.itemSpec, unit: s.unit,
-      stockQty: Number(s.qty) || 0, deliveredQty: delivered, remain, cat,
+      stockQty: base, deliveredQty: delivered, inProgressQty: inProgress, real, available, cat,
     };
   });
 
@@ -1488,12 +1513,16 @@ function StockView({ stock, requests, projects, catalog = [] }) {
   function exportExcel() {
     const data = filtered.map(r => ({
       '프로젝트': r.projectName, '품목명': r.itemName, '규격': r.itemSpec,
-      '보유물량': formatStockByUnit(r.cat, r.stockQty), '입고완료': formatStockByUnit(r.cat, r.deliveredQty),
-      '재고물량': formatStockByUnit(r.cat, r.remain),
-      '보유(낱개)': r.stockQty, '입고(낱개)': r.deliveredQty, '재고(낱개)': r.remain, '단위': r.unit,
+      '보유물량': formatStockByUnit(r.cat, r.stockQty),
+      '진행중': formatStockByUnit(r.cat, r.inProgressQty),
+      '입고완료': formatStockByUnit(r.cat, r.deliveredQty),
+      '가용재고': formatStockByUnit(r.cat, r.available),
+      '실재고': formatStockByUnit(r.cat, r.real),
+      '보유(낱개)': r.stockQty, '진행중(낱개)': r.inProgressQty, '입고(낱개)': r.deliveredQty,
+      '가용(낱개)': r.available, '실재고(낱개)': r.real, '단위': r.unit,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
-    ws['!cols'] = [{wch:20},{wch:16},{wch:22},{wch:14},{wch:14},{wch:14},{wch:10},{wch:10},{wch:10},{wch:8}];
+    ws['!cols'] = [{wch:20},{wch:16},{wch:22},{wch:14},{wch:12},{wch:14},{wch:14},{wch:14},{wch:10},{wch:10},{wch:10},{wch:10},{wch:10},{wch:8}];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '재고현황');
     const d = new Date();
@@ -1511,12 +1540,18 @@ function StockView({ stock, requests, projects, catalog = [] }) {
         <button className="mrs-btn mrs-btn-primary" onClick={exportExcel} disabled={filtered.length === 0}><Download size={15} /> 엑셀로 내보내기</button>
       </div>
 
+      <div style={{ fontSize: 11, color: 'var(--ink-soft)', marginBottom: 10, lineHeight: 1.5 }}>
+        · <b style={{ color: '#B84B10' }}>가용재고</b> = 보유 − 진행중 − 입고완료 (발주 판단용) &nbsp;·&nbsp;
+        <b style={{ color: '#2E6B47' }}>실재고</b> = 보유 − 입고완료 (창고 실물) &nbsp;·&nbsp;
+        <b style={{ color: '#B8791F' }}>진행중</b> = 요청·확인됐으나 입고 전
+      </div>
+
       {filtered.length === 0 ? (
         <div className="mrs-card mrs-empty">등록된 보유물량이 없습니다. 관리자 → 관리 설정에서 등록하세요.</div>
       ) : (
         <div className="mrs-table-wrap">
           <table className="mrs-table">
-            <thead><tr><th>프로젝트</th><th>품목</th><th>규격</th><th>보유물량</th><th>입고완료</th><th>재고물량</th></tr></thead>
+            <thead><tr><th>프로젝트</th><th>품목</th><th>규격</th><th>보유물량</th><th>진행중</th><th>입고완료</th><th>가용재고</th><th>실재고</th></tr></thead>
             <tbody>
               {filtered.map(r => {
                 const conv = r.cat && ((r.cat.bigUnit && Number(r.cat.factor1) > 0) || (r.cat.midUnit && Number(r.cat.factor2) > 0));
@@ -1530,12 +1565,20 @@ function StockView({ stock, requests, projects, catalog = [] }) {
                     {conv && <div className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>{r.stockQty.toLocaleString()} {r.unit}</div>}
                   </td>
                   <td>
-                    <div style={{ color: '#2B5A8C', fontWeight: 600 }}>{formatStockByUnit(r.cat, r.deliveredQty)}</div>
+                    <div style={{ color: '#B8791F', fontWeight: 600 }}>{r.inProgressQty > 0 ? formatStockByUnit(r.cat, r.inProgressQty) : '-'}</div>
+                    {conv && r.inProgressQty > 0 && <div className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>{r.inProgressQty.toLocaleString()} {r.unit}</div>}
+                  </td>
+                  <td>
+                    <div style={{ color: '#2B5A8C', fontWeight: 600 }}>{r.deliveredQty > 0 ? formatStockByUnit(r.cat, r.deliveredQty) : '-'}</div>
                     {conv && r.deliveredQty > 0 && <div className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>{r.deliveredQty.toLocaleString()} {r.unit}</div>}
                   </td>
                   <td>
-                    <div style={{ color: r.remain < 0 ? '#B84B10' : '#2E6B47', fontWeight: 700 }}>{formatStockByUnit(r.cat, r.remain)}</div>
-                    {conv && <div className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>{r.remain.toLocaleString()} {r.unit}</div>}
+                    <div style={{ color: r.available < 0 ? '#B84B10' : '#B84B10', fontWeight: 700 }}>{formatStockByUnit(r.cat, r.available)}</div>
+                    {conv && <div className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>{r.available.toLocaleString()} {r.unit}</div>}
+                  </td>
+                  <td>
+                    <div style={{ color: '#2E6B47', fontWeight: 700 }}>{formatStockByUnit(r.cat, r.real)}</div>
+                    {conv && <div className="mrs-mono" style={{ fontSize: 11, color: 'var(--ink-soft)' }}>{r.real.toLocaleString()} {r.unit}</div>}
                   </td>
                 </tr>
                 );
