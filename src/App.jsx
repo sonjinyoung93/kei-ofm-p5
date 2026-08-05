@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import { NanumGothicBase64 } from './NanumGothicFont';
-import { Plus, Trash2, Download, ClipboardList, LayoutDashboard, Loader2, AlertCircle, CheckCircle2, X, Save, LogOut, Building2, Users, ListChecks, CalendarDays, Lock, PenLine, PackageMinus, RefreshCw, MapPin, Package } from 'lucide-react';
+import { Plus, Trash2, Download, ClipboardList, LayoutDashboard, Loader2, AlertCircle, CheckCircle2, XCircle, X, Save, LogOut, Building2, Users, ListChecks, CalendarDays, Lock, PenLine, PackageMinus, RefreshCw, MapPin, Package } from 'lucide-react';
 
 const UNITS = ['EA', 'M', 'SET', 'BOX', 'ROLL', 'KG', '본', '롤'];
 
@@ -26,6 +26,7 @@ const STATUS_COLOR = {
   '요청됨':       { bg: '#EEF0EC', fg: '#5C6B73', bd: '#C9CFC6' },
   '확인됨':       { bg: '#E3ECF5', fg: '#2B5A8C', bd: '#9FBEDC' },
   '입고완료':     { bg: '#E1EBE3', fg: '#2E6B47', bd: '#9FC7AC' },
+  '반려됨':       { bg: '#FBE7DA', fg: '#B84B10', bd: '#F0A97A' },
   '반출요청':     { bg: '#FBE7DA', fg: '#B84B10', bd: '#F0A97A' },
   '반출확인완료': { bg: '#E1EBE3', fg: '#2E6B47', bd: '#9FC7AC' },
 };
@@ -37,7 +38,7 @@ const DEFAULT_PROJECTS = [
 ];
 
 // ⚠️ 구글 Apps Script를 "웹 앱으로 배포"한 뒤 나오는 URL로 반드시 교체하세요.
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwVPkUPP93WpzWhZLZ4F4fOkQkC5HQ-h1UM7cK72MzdCJ4oxfT5ALwA6GsDj-LSJbpW/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwVPkUPP93WpzWhZLZ4F4fOkQkC5HQ-h1UM7cK72MzdCJ4oxfT5ALwA6GsDj-LSJbpW/execc';
 
 async function apiGet(action) {
   const res = await fetch(`${APPS_SCRIPT_URL}?action=${action}`);
@@ -563,10 +564,34 @@ function RequestForm({ session, projectName, catalog, stock, requests, onSubmit,
   function addItem() { setItems([...items, newItemRow(catalog)]); }
   function removeItem(id) { if (items.length === 1) return; setItems(items.filter(it => it.id !== id)); }
 
+  const [checking, setChecking] = useState(false);
+
   async function handleSubmit() {
     if (catalog.length === 0) { alert('품목이 등록되어 있지 않습니다.'); return; }
     const valid = items.filter(it => it.name && Number(it.qty) > 0);
     if (valid.length === 0) { alert('최소 1개 이상의 품목에 수량을 입력해주세요.'); return; }
+
+    // A안: 제출 직전 서버에서 최신 요청 목록을 다시 불러와 가용재고 재검증 (초과 시에만 확인창)
+    let latestRequests = requests;
+    try {
+      setChecking(true);
+      const fresh = await apiGet('list');
+      if (Array.isArray(fresh)) latestRequests = fresh;
+    } catch (e) { /* 조회 실패 시 로컬 기준으로 진행 */ }
+    finally { setChecking(false); }
+
+    const overList = [];
+    valid.forEach(it => {
+      const info = computeStockInfo(stock, latestRequests, session.projectId, it.name, it.spec);
+      if (info && Number(it.qty) > info.available) {
+        overList.push(`· ${it.name} ${it.spec}: 요청 ${formatStockByUnit(findCatalogItem(catalog, it.name, it.spec), it.qty)} / 가용 ${formatStockByUnit(findCatalogItem(catalog, it.name, it.spec), info.available)}`);
+      }
+    });
+    if (overList.length > 0) {
+      const ok = confirm(`다른 팀장의 요청으로 아래 품목이 가용재고를 초과합니다.\n\n${overList.join('\n')}\n\n그래도 제출할까요?`);
+      if (!ok) return;
+    }
+
     const payload = {
       id: genId(), reqNo: genReqNo(), requester: session.name, username: session.username,
       projectId: session.projectId, zoneName: '', process: '', note: note.trim(), createdAt: new Date().toISOString(),
@@ -612,8 +637,8 @@ function RequestForm({ session, projectName, catalog, stock, requests, onSubmit,
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 22 }}>
-        <button className="mrs-btn mrs-btn-primary" onClick={handleSubmit} disabled={saving}>
-          {saving ? <Loader2 size={15} className="mrs-spin" /> : <ClipboardList size={15} />} 요청 제출
+        <button className="mrs-btn mrs-btn-primary" onClick={handleSubmit} disabled={saving || checking}>
+          {(saving || checking) ? <Loader2 size={15} className="mrs-spin" /> : <ClipboardList size={15} />} {checking ? '재고 확인 중…' : '요청 제출'}
         </button>
         {justSubmitted && <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#2E6B47', fontSize: 13, fontWeight: 600 }}><CheckCircle2 size={16} /> 요청이 접수되었습니다</span>}
       </div>
@@ -622,7 +647,7 @@ function RequestForm({ session, projectName, catalog, stock, requests, onSubmit,
 }
 
 // ── 팀장: 요청리스트 (본인 요청 조회 + 삭제 + 입고확인 + PDF) ──
-function MyRequestList({ requests, session, projects, catalog = [], onConfirmReceipt, onDelete, saving }) {
+function MyRequestList({ requests, session, projects, catalog = [], stock = [], onConfirmReceipt, onDelete, saving }) {
   const [confirmingReqId, setConfirmingReqId] = useState(null);
   const projectNameById = {};
   projects.forEach(p => { projectNameById[p.id] = p.name; });
@@ -633,8 +658,26 @@ function MyRequestList({ requests, session, projects, catalog = [], onConfirmRec
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
   function allRequested(r) { return r.items.every(it => it.status === '요청됨'); }
+  function isRejected(r) { return r.items.every(it => it.status === '반려됨'); }
   function allConfirmedOrDelivered(r) { return r.items.every(it => it.status === '확인됨' || it.status === '입고완료'); }
   function allDelivered(r) { return r.items.every(it => it.status === '입고완료'); }
+
+  // 이 요청을 제외한 가용재고 (자기 자신 제외)
+  function availableExcluding(r, name, spec) {
+    const stockItem = stock.find(s => s.projectId === r.projectId && s.itemName === name && s.itemSpec === spec);
+    if (!stockItem) return null;
+    let delivered = 0, inProgress = 0;
+    requests.forEach(rr => {
+      if (rr.projectId !== r.projectId || rr.id === r.id) return;
+      rr.items.forEach(it => {
+        if (it.name !== name || it.spec !== spec) return;
+        const q = Number(it.qty) || 0;
+        if (it.status === '입고완료') { if (rr.confirmedAt) delivered += q; }
+        else if (it.status === '요청됨' || it.status === '확인됨') { inProgress += q; }
+      });
+    });
+    return (Number(stockItem.qty) || 0) - delivered - inProgress;
+  }
 
   async function handleConfirm(r, sig) {
     await onConfirmReceipt(r.id, sig);
@@ -655,15 +698,20 @@ function MyRequestList({ requests, session, projects, catalog = [], onConfirmRec
       <h2 className="mrs-display" style={{ fontSize: 18, margin: '0 0 14px', fontWeight: 600 }}>요청리스트</h2>
       {mine.length === 0 ? (
         <div className="mrs-card mrs-empty">제출한 요청이 없습니다.</div>
-      ) : mine.map(r => (
-        <div className="mrs-card" key={r.id} style={{ padding: 16, marginBottom: 12 }}>
+      ) : mine.map(r => {
+        const rejected = isRejected(r);
+        const rejectNote = rejected && r.note && r.note.includes('[반려]') ? r.note.split('[반려]').pop().trim() : '';
+        return (
+        <div className="mrs-card" key={r.id} style={{ padding: 16, marginBottom: 12, borderColor: rejected ? '#F0A97A' : undefined }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 6 }}>
             <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{r.reqNo}</span>
             <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{fmtDate(r.createdAt)}</span>
           </div>
-          {r.note && <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 10 }}>{r.note}</div>}
+          {r.note && !rejected && <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 10 }}>{r.note}</div>}
           {r.items.map(it => {
             const q = formatItemQty(catalog, it.name, it.spec, it.qty, it.unit);
+            const avail = allRequested(r) ? availableExcluding(r, it.name, it.spec) : null;
+            const over = avail !== null && (Number(it.qty) || 0) > avail;
             return (
             <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px dashed var(--paper-line)' }}>
               <span style={{ fontSize: 13 }}>
@@ -671,15 +719,24 @@ function MyRequestList({ requests, session, projects, catalog = [], onConfirmRec
                 <span style={{ fontWeight: 700, color: 'var(--accent)', marginLeft: 6 }}>{q.big}</span>
                 {q.conv && <span style={{ fontSize: 11, color: 'var(--ink-soft)' }}> ({q.baseStr})</span>}
               </span>
-              <StatusBadge value={it.status} />
+              <span style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+                {over && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#FBE7DA', color: '#B84B10', border: '1px solid #F0A97A' }}>가용초과</span>}
+                <StatusBadge value={it.status} />
+              </span>
             </div>
             );
           })}
 
+          {rejected && (
+            <div style={{ marginTop: 10, padding: 9, background: '#FBE7DA', borderRadius: 6, fontSize: 12, color: '#B84B10' }}>
+              ⚠ 자재팀 반려{rejectNote ? `: ${rejectNote}` : ''} — 삭제 후 다시 요청해주세요.
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-            {allRequested(r) && (
+            {(allRequested(r) || rejected) && (
               <button className="mrs-btn mrs-btn-danger" style={{ borderColor: '#F0A97A' }} onClick={() => { if (confirm('이 요청을 삭제할까요?')) onDelete(r.id); }}>
-                <Trash2 size={15} /> 요청 삭제
+                <Trash2 size={15} /> {rejected ? '삭제 후 재요청' : '요청 삭제'}
               </button>
             )}
             {allDelivered(r) ? (
@@ -699,7 +756,8 @@ function MyRequestList({ requests, session, projects, catalog = [], onConfirmRec
             />
           )}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -821,7 +879,7 @@ function LeaderApp({ session, requests, returns, projects, catalog, stock, onSub
         <button className={`mrs-tab ${tab === 'returnlist' ? 'active' : ''}`} onClick={() => setTab('returnlist')}><CalendarDays size={16} /> 반출리스트</button>
       </div>
       {tab === 'form' && <RequestForm session={session} projectName={projectName} catalog={catalog} stock={stock} requests={requests} onSubmit={onSubmit} saving={saving} />}
-      {tab === 'mylist' && <MyRequestList requests={requests} session={session} projects={projects} catalog={catalog} onConfirmReceipt={onConfirmReceipt} onDelete={onDeleteRequest} saving={saving} />}
+      {tab === 'mylist' && <MyRequestList requests={requests} session={session} projects={projects} catalog={catalog} stock={stock} onConfirmReceipt={onConfirmReceipt} onDelete={onDeleteRequest} saving={saving} />}
       {tab === 'return' && <ReturnPanel session={session} projectName={projectName} catalog={catalog} returns={returns} onSubmit={onSubmitReturn} saving={saving} />}
       {tab === 'returnlist' && <ReturnsTable returns={myReturns} projects={projects} catalog={catalog} />}
     </div>
@@ -1695,7 +1753,7 @@ function AdminAccountManager({ session, onUpdate, saving }) {
 }
 
 // ── 관리자 전체 화면 (자재팀과 동일한 구성 + 관리 설정) ───
-function AdminApp({ session, requests, returns, projects, users, zones, catalog, stock, onUpdateStatus, onDelete, onSaveProjects, onSaveZones, onSaveCatalog, onSaveStock, onAddUser, onUpdateUser, onDeleteUser, onConfirmReturn, savingSettings }) {
+function AdminApp({ session, requests, returns, projects, users, zones, catalog, stock, onUpdateStatus, onReject, onDelete, onSaveProjects, onSaveZones, onSaveCatalog, onSaveStock, onAddUser, onUpdateUser, onDeleteUser, onConfirmReturn, savingSettings }) {
   const [tab, setTab] = useState('outbound');
   return (
     <div className="mrs-body">
@@ -1708,7 +1766,7 @@ function AdminApp({ session, requests, returns, projects, users, zones, catalog,
         <button className={`mrs-tab ${tab === 'manage' ? 'active' : ''}`} onClick={() => setTab('manage')}><Users size={16} /> 관리 설정</button>
       </div>
 
-      {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} catalog={catalog} onUpdateStatus={onUpdateStatus} />}
+      {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} catalog={catalog} stock={stock} onUpdateStatus={onUpdateStatus} onReject={onReject} />}
       {tab === 'all' && <RequestsTable requests={requests} projects={projects} catalog={catalog} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" allowPdf />}
       {tab === 'return' && <MaterialReturns returns={returns} projects={projects} catalog={catalog} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
       {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} catalog={catalog} />}
@@ -1728,7 +1786,7 @@ function AdminApp({ session, requests, returns, projects, users, zones, catalog,
 }
 
 // ── 자재팀: 발주확인 대기 ──────────────────────────────
-function MaterialOutbound({ requests, projects, catalog = [], onUpdateStatus }) {
+function MaterialOutbound({ requests, projects, catalog = [], stock = [], onUpdateStatus, onReject }) {
   const projectNameById = {};
   projects.forEach(p => { projectNameById[p.id] = p.name; });
 
@@ -1738,11 +1796,34 @@ function MaterialOutbound({ requests, projects, catalog = [], onUpdateStatus }) 
     .slice()
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
+  // 이 요청(r)을 제외한 가용재고 계산 → 자기 자신 때문에 초과로 뜨는 오류 방지
+  function availableExcluding(r, name, spec) {
+    const stockItem = stock.find(s => s.projectId === r.projectId && s.itemName === name && s.itemSpec === spec);
+    if (!stockItem) return null;
+    let delivered = 0, inProgress = 0;
+    requests.forEach(rr => {
+      if (rr.projectId !== r.projectId || rr.id === r.id) return; // 자기 요청 제외
+      rr.items.forEach(it => {
+        if (it.name !== name || it.spec !== spec) return;
+        const q = Number(it.qty) || 0;
+        if (it.status === '입고완료') { if (rr.confirmedAt) delivered += q; }
+        else if (it.status === '요청됨' || it.status === '확인됨') { inProgress += q; }
+      });
+    });
+    return (Number(stockItem.qty) || 0) - delivered - inProgress;
+  }
+
   async function confirmAll(r) {
     // 요청의 모든 품목을 '확인됨'으로 일괄 변경
     for (const it of r.items) {
       await onUpdateStatus(r.id, it.id, '확인됨');
     }
+  }
+
+  function rejectReq(r) {
+    const reason = prompt('반려 사유를 입력하세요 (선택, 비워도 됩니다):', '');
+    if (reason === null) return; // 취소
+    onReject(r.id, reason.trim());
   }
 
   return (
@@ -1760,16 +1841,36 @@ function MaterialOutbound({ requests, projects, catalog = [], onUpdateStatus }) 
           </div>
           {r.items.map(it => {
             const q = formatItemQty(catalog, it.name, it.spec, it.qty, it.unit);
+            const cat = findCatalogItem(catalog, it.name, it.spec);
+            const avail = availableExcluding(r, it.name, it.spec);
+            const over = avail !== null && (Number(it.qty) || 0) > avail;
             return (
             <div key={it.id} style={{ padding: '6px 0', borderTop: '1px dashed var(--paper-line)' }}>
-              <div style={{ fontSize: 13 }}><b>{it.name}</b> {it.spec}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 13 }}><b>{it.name}</b> {it.spec}</span>
+                {avail !== null && (
+                  <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 6,
+                    border: `1px solid ${over ? '#D9601B' : '#2E6B47'}`,
+                    background: over ? '#FBE7DA' : '#E1EBE3', color: over ? '#B84B10' : '#2E6B47' }}>
+                    {over ? '가용초과' : '가용재고 내'}
+                  </span>
+                )}
+              </div>
               <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--accent)' }}>{q.big}{q.conv && <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--ink-soft)' }}> ({q.baseStr})</span>}</div>
+              {over && (
+                <div style={{ fontSize: 11, color: '#B84B10' }}>가용재고 {formatStockByUnit(cat, avail)}({avail.toLocaleString()}) 초과</div>
+              )}
             </div>
             );
           })}
-          <button className="mrs-btn mrs-btn-primary" style={{ width: '100%', marginTop: 12, justifyContent: 'center' }} onClick={() => confirmAll(r)}>
-            <CheckCircle2 size={15} /> 발주확인 (전체 품목)
-          </button>
+          <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
+            <button className="mrs-btn mrs-btn-primary" style={{ flex: 1, justifyContent: 'center' }} onClick={() => confirmAll(r)}>
+              <CheckCircle2 size={15} /> 발주확인
+            </button>
+            <button className="mrs-btn" style={{ flex: 1, justifyContent: 'center', background: 'var(--paper)', color: '#B84B10', border: '1px solid #F0A97A' }} onClick={() => rejectReq(r)}>
+              <XCircle size={15} /> 반려
+            </button>
+          </div>
         </div>
       ))}
     </div>
@@ -1823,7 +1924,7 @@ function MaterialReturns({ returns, projects = [], catalog = [], onConfirmReturn
   );
 }
 
-function MaterialApp({ requests, projects, returns, stock, catalog, onUpdateStatus, onConfirmReturn, savingSettings }) {
+function MaterialApp({ requests, projects, returns, stock, catalog, onUpdateStatus, onReject, onConfirmReturn, savingSettings }) {
   const [tab, setTab] = useState('outbound');
   return (
     <div className="mrs-body">
@@ -1834,7 +1935,7 @@ function MaterialApp({ requests, projects, returns, stock, catalog, onUpdateStat
         <button className={`mrs-tab ${tab === 'returns' ? 'active' : ''}`} onClick={() => setTab('returns')}><CalendarDays size={16} /> 누계 반출리스트</button>
         <button className={`mrs-tab ${tab === 'stock' ? 'active' : ''}`} onClick={() => setTab('stock')}><Package size={16} /> 재고 현황</button>
       </div>
-      {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} catalog={catalog} onUpdateStatus={onUpdateStatus} />}
+      {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} catalog={catalog} stock={stock} onUpdateStatus={onUpdateStatus} onReject={onReject} />}
       {tab === 'all' && <RequestsTable requests={requests} projects={projects} catalog={catalog} onUpdateStatus={onUpdateStatus} scope="all" allowPdf role="material" />}
       {tab === 'return' && <MaterialReturns returns={returns} projects={projects} catalog={catalog} onConfirmReturn={onConfirmReturn} saving={savingSettings} />}
       {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} catalog={catalog} />}
@@ -1913,6 +2014,19 @@ export default function App() {
     setSaving(true); setError(null);
     try { await apiPost('updateStatus', { itemId, status }); }
     catch (e) { setError('상태 변경에 실패했습니다.'); await loadData(session.role); }
+    finally { setSaving(false); }
+  }
+
+  async function handleReject(reqId, reason) {
+    const rejNote = reason ? `[반려] ${reason}` : '[반려]';
+    const next = requests.map(r => r.id !== reqId ? r : {
+      ...r, items: r.items.map(it => ({ ...it, status: '반려됨' })),
+      note: r.note ? `${r.note} ${rejNote}` : rejNote,
+    });
+    setRequests(next);
+    setSaving(true); setError(null);
+    try { await apiPost('rejectRequest', { data: { reqId, reason } }); }
+    catch (e) { setError('반려 처리에 실패했습니다.'); await loadData(session.role); }
     finally { setSaving(false); }
   }
 
@@ -2070,13 +2184,13 @@ export default function App() {
       ) : session.role === 'admin' ? (
         <AdminApp
           session={session} requests={requests} returns={returns} projects={projects} users={users} zones={zones} catalog={catalog} stock={stock}
-          onUpdateStatus={handleUpdateStatus} onDelete={handleDeleteWithPassword} onConfirmReturn={handleConfirmReturn}
+          onUpdateStatus={handleUpdateStatus} onReject={handleReject} onDelete={handleDeleteWithPassword} onConfirmReturn={handleConfirmReturn}
           onSaveProjects={handleSaveProjects} onSaveZones={handleSaveZones} onSaveCatalog={handleSaveCatalog} onSaveStock={handleSaveStock}
           onAddUser={handleAddUser} onUpdateUser={handleUpdateUser} onDeleteUser={handleDeleteUser}
           savingSettings={savingSettings}
         />
       ) : session.role === 'material' ? (
-        <MaterialApp requests={requests} projects={projects} returns={returns} stock={stock} catalog={catalog} onUpdateStatus={handleUpdateStatus} onConfirmReturn={handleConfirmReturn} savingSettings={savingSettings} />
+        <MaterialApp requests={requests} projects={projects} returns={returns} stock={stock} catalog={catalog} onUpdateStatus={handleUpdateStatus} onReject={handleReject} onConfirmReturn={handleConfirmReturn} savingSettings={savingSettings} />
       ) : (
         <LeaderApp session={session} requests={requests} returns={returns} projects={projects} catalog={catalog} stock={stock} onSubmit={handleSubmit} onSubmitReturn={handleSubmitReturn} onConfirmReceipt={handleConfirmReceipt} onDeleteRequest={handleDelete} saving={saving} />
       )}
