@@ -38,7 +38,7 @@ const DEFAULT_PROJECTS = [
 ];
 
 // ⚠️ 구글 Apps Script를 "웹 앱으로 배포"한 뒤 나오는 URL로 반드시 교체하세요.
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwVPkUPP93WpzWhZLZ4F4fOkQkC5HQ-h1UM7cK72MzdCJ4oxfT5ALwA6GsDj-LSJbpW/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxTbQELYNwPcahqIfJ2-gMgv2QLHlA1alhvB6VzaiSeJZidfhHeJru6d_lcaAsPOUtZ/exec';
 
 async function apiGet(action) {
   const res = await fetch(`${APPS_SCRIPT_URL}?action=${action}`);
@@ -1096,7 +1096,7 @@ function RequestsTable({ requests, projects, catalog = [], onUpdateStatus, onDel
 }
 
 // ── 누계반출리스트 (관리자/자재팀 공용) ─────────────────────
-function ReturnsTable({ returns, projects, catalog = [] }) {
+function ReturnsTable({ returns, projects, catalog = [], onDelete }) {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [statusFilter, setStatusFilter] = useState('전체');
@@ -1183,9 +1183,14 @@ function ReturnsTable({ returns, projects, catalog = [] }) {
                   <td style={{ color: 'var(--ink-soft)' }}>{r.storageLocation || '-'}</td>
                   <td><StatusBadge value={r.status} /></td>
                   <td>
-                    {r.status === '반출확인완료' && (
-                      <button className="mrs-btn mrs-btn-ghost" style={{ padding: '4px 8px', fontSize: 12 }} onClick={() => downloadPdf(r.ret)} title="반출확인서"><Download size={13} /></button>
-                    )}
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      {r.status === '반출확인완료' && (
+                        <button className="mrs-btn mrs-btn-ghost" style={{ padding: '4px 8px', fontSize: 12 }} onClick={() => downloadPdf(r.ret)} title="반출확인서"><Download size={13} /></button>
+                      )}
+                      {onDelete && (
+                        <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: '#B84B10' }} onClick={() => onDelete(r.reqId)} title="반출 삭제"><X size={15} /></button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -1836,7 +1841,7 @@ function AdminAccountManager({ session, onUpdate, saving }) {
 }
 
 // ── 관리자 전체 화면 (자재팀과 동일한 구성 + 관리 설정) ───
-function AdminApp({ session, requests, returns, projects, users, zones, catalog, stock, onUpdateStatus, onReject, onRejectReturn, onDelete, onSaveProjects, onSaveZones, onSaveCatalog, onSaveStock, onAddUser, onUpdateUser, onDeleteUser, onConfirmReturn, savingSettings }) {
+function AdminApp({ session, requests, returns, projects, users, zones, catalog, stock, onUpdateStatus, onReject, onRejectReturn, onDelete, onDeleteReturn, onSaveProjects, onSaveZones, onSaveCatalog, onSaveStock, onAddUser, onUpdateUser, onDeleteUser, onConfirmReturn, savingSettings }) {
   const [tab, setTab] = useState('outbound');
   return (
     <div className="mrs-body">
@@ -1852,7 +1857,7 @@ function AdminApp({ session, requests, returns, projects, users, zones, catalog,
       {tab === 'outbound' && <MaterialOutbound requests={requests} projects={projects} catalog={catalog} stock={stock} onUpdateStatus={onUpdateStatus} onReject={onReject} />}
       {tab === 'all' && <RequestsTable requests={requests} projects={projects} catalog={catalog} onUpdateStatus={onUpdateStatus} onDelete={onDelete} scope="all" allowPdf />}
       {tab === 'return' && <ReturnConfirmPanel returns={returns} projects={projects} catalog={catalog} onConfirmReturn={onConfirmReturn} onReject={onRejectReturn} saving={savingSettings} confirmerName={session.name} canReject />}
-      {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} catalog={catalog} />}
+      {tab === 'returns' && <ReturnsTable returns={returns} projects={projects} catalog={catalog} onDelete={onDeleteReturn} />}
       {tab === 'stock' && <StockView stock={stock} requests={requests} projects={projects} catalog={catalog} />}
       {tab === 'manage' && (
         <div>
@@ -1960,30 +1965,15 @@ function MaterialOutbound({ requests, projects, catalog = [], stock = [], onUpda
   );
 }
 
-// ── 자재팀: 반출확인 대기 ──────────────────────────────
-// 품질팀/관리자: 반출확인 대기 — 무게·보관장소 수정 + 서명 확인 + 반려
+// 품질팀/관리자: 반출확인 대기 — 팀장이 작성한 무게·보관장소를 확인(읽기전용)만 하고 서명 + 반려
 function ReturnConfirmPanel({ returns, projects = [], catalog = [], onConfirmReturn, onReject, saving, confirmerName = '', canReject = true }) {
   const [confirmingId, setConfirmingId] = useState(null);
-  const [edits, setEdits] = useState({}); // { reqId: { itemId: {weight, storageLocation} } }
   const projectNameById = {};
   projects.forEach(p => { projectNameById[p.id] = p.name; });
   const pending = returns.filter(r => r.status !== '반출확인완료' && r.status !== '반려됨').slice().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
-  function editVal(r, it, field) {
-    const e = edits[r.id] && edits[r.id][it.id];
-    if (e && e[field] !== undefined) return e[field];
-    if (field === 'weight') return (it.weight === undefined || it.weight === null) ? '' : it.weight;
-    return it.storageLocation || '';
-  }
-  function setEdit(r, it, field, value) {
-    setEdits(prev => ({ ...prev, [r.id]: { ...(prev[r.id] || {}), [it.id]: { ...((prev[r.id] || {})[it.id] || {}), [field]: value } } }));
-  }
-  function collectItems(r) {
-    return r.items.map(it => ({ itemId: it.id, weight: editVal(r, it, 'weight') === '' ? '' : Number(editVal(r, it, 'weight')), storageLocation: (editVal(r, it, 'storageLocation') || '').toString().trim() }));
-  }
-
   async function handleConfirm(r, sig) {
-    await onConfirmReturn(r.id, sig, collectItems(r));
+    await onConfirmReturn(r.id, sig); // 무게·보관장소는 팀장 작성값 그대로 유지
     setConfirmingId(null);
   }
   function handleReject(r) {
@@ -2003,21 +1993,26 @@ function ReturnConfirmPanel({ returns, projects = [], catalog = [], onConfirmRet
             <span className="mrs-mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{fmtDate(r.createdAt)}</span>
           </div>
           {(projectNameById[r.projectId] || r.reason) && <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>{projectNameById[r.projectId] || ''}{r.reason ? ` · ${r.reason}` : ''}</div>}
-          {r.items.map(it => (
+          {r.items.map(it => {
+            const f = formatReturnItem(it);
+            return (
             <div key={it.id} style={{ padding: '6px 0', borderTop: '1px dashed var(--paper-line)' }}>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{it.name}</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '0.9fr 1.3fr', gap: 6 }}>
+              <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
                 <div>
-                  <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>무게 (kg)</span>
-                  <input className="mrs-input" type="number" min="0" step="0.1" value={editVal(r, it, 'weight')} onChange={e => setEdit(r, it, 'weight', e.target.value)} placeholder="실측값 입력" />
+                  <span style={{ fontSize: 10, color: 'var(--ink-soft)', display: 'block' }}>무게 (kg)</span>
+                  <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--accent)' }}>
+                    {f.legacy ? f.qtyStr : (f.hasW ? `${f.w.toLocaleString()} kg` : <span style={{ fontSize: 12, fontWeight: 400, color: '#B84B10' }}>미입력</span>)}
+                  </span>
                 </div>
                 <div>
-                  <span style={{ fontSize: 10, color: 'var(--ink-soft)' }}>보관 장소</span>
-                  <input className="mrs-input" value={editVal(r, it, 'storageLocation')} onChange={e => setEdit(r, it, 'storageLocation', e.target.value)} placeholder="예: A동 야적장" />
+                  <span style={{ fontSize: 10, color: 'var(--ink-soft)', display: 'block' }}>보관 장소</span>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>{f.loc || <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--ink-soft)' }}>미입력</span>}</span>
                 </div>
               </div>
             </div>
-          ))}
+            );
+          })}
           {confirmingId !== r.id ? (
             <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
               <button className="mrs-btn mrs-btn-primary" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setConfirmingId(r.id)}><PenLine size={15} /> 반출확인</button>
@@ -2215,6 +2210,21 @@ export default function App() {
     finally { setSavingSettings(false); }
   }
 
+  async function handleDeleteReturn(reqId) {
+    const pwd = prompt('이 반출 기록을 삭제하시겠습니까?\n관리자 비밀번호를 입력해주세요.');
+    if (pwd === null) return;
+    if (!pwd) { alert('비밀번호를 입력해주세요.'); return; }
+    try {
+      const check = await apiPost('login', { username: session.username, password: pwd });
+      if (check.error) { alert('비밀번호가 올바르지 않습니다.'); return; }
+    } catch (e) { alert('비밀번호 확인 중 오류가 발생했습니다.'); return; }
+    setReturns(returns.filter(r => r.id !== reqId));
+    setSavingSettings(true); setError(null);
+    try { await apiPost('deleteReturn', { reqId }); }
+    catch (e) { setError('반출 삭제에 실패했습니다.'); await loadData(session.role); }
+    finally { setSavingSettings(false); }
+  }
+
   async function handleRejectReturn(reqId, reason) {
     const rejNote = reason ? `[반려] ${reason}` : '[반려]';
     const next = returns.map(r => r.id !== reqId ? r : {
@@ -2326,7 +2336,7 @@ export default function App() {
       ) : session.role === 'admin' ? (
         <AdminApp
           session={session} requests={requests} returns={returns} projects={projects} users={users} zones={zones} catalog={catalog} stock={stock}
-          onUpdateStatus={handleUpdateStatus} onReject={handleReject} onRejectReturn={handleRejectReturn} onDelete={handleDeleteWithPassword} onConfirmReturn={handleConfirmReturn}
+          onUpdateStatus={handleUpdateStatus} onReject={handleReject} onRejectReturn={handleRejectReturn} onDelete={handleDeleteWithPassword} onDeleteReturn={handleDeleteReturn} onConfirmReturn={handleConfirmReturn}
           onSaveProjects={handleSaveProjects} onSaveZones={handleSaveZones} onSaveCatalog={handleSaveCatalog} onSaveStock={handleSaveStock}
           onAddUser={handleAddUser} onUpdateUser={handleUpdateUser} onDeleteUser={handleDeleteUser}
           savingSettings={savingSettings}
